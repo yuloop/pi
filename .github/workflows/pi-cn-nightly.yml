@@ -1,25 +1,25 @@
-name: Pi Chinese Release
+name: Pi Chinese Nightly
 
-# pi（earendil-works/pi）汉化版【正式版】自动构建发布流水线
-# 每小时检查上游最新正式 Release：有新正式版则同步 → 校验翻译词表 100% 匹配 → 应用汉化 → 构建 → 发布 v<上游版本>-cn Release
-# 实时更新版见 pi-cn-nightly.yml（跟随上游 main 每小时构建）
+# pi（earendil-works/pi）汉化版【实时更新版】自动构建发布流水线（nightly）
+# 每小时检查上游 main 最新提交：有变化则同步 → 校验翻译词表 100% 匹配 → 应用汉化 → 构建 → 发布 v<上游版本>-cn-nightly 预览版
+# 正式版见 pi-cn-release.yml（跟随上游正式 Release）
 
 on:
   schedule:
-    - cron: "17 * * * *"
+    - cron: "47 * * * *"
   workflow_dispatch:
     inputs:
       upstream_ref:
-        description: "上游分支或 commit（留空为上游最新正式 Release）"
+        description: "上游分支或 commit（留空为 main 最新提交）"
         required: false
         type: string
       release_tag:
-        description: "本仓库发布 tag（留空为 v<上游版本>-cn）"
+        description: "本仓库发布 tag（留空为 v<上游版本>-cn-nightly）"
         required: false
         type: string
 
 concurrency:
-  group: pi-cn-release
+  group: pi-cn-nightly
   cancel-in-progress: false
 
 permissions:
@@ -48,16 +48,11 @@ jobs:
         run: |
           set -euo pipefail
 
-          # 默认跟随上游最新正式 Release（tag）；dispatch 可指定任意分支/commit
-          if [[ -n "${REQUESTED_UPSTREAM}" ]]; then
-            upstream="${REQUESTED_UPSTREAM}"
-            if [[ "$upstream" =~ ^[0-9a-f]{40}$ ]]; then
-              sha="$upstream"
-            else
-              sha="$(gh api "repos/${UPSTREAM_REPO}/commits/${upstream}" --jq '.sha')"
-            fi
+          # 跟随上游 main 最新提交；dispatch 可指定任意分支/commit
+          upstream="${REQUESTED_UPSTREAM:-main}"
+          if [[ "$upstream" =~ ^[0-9a-f]{40}$ ]]; then
+            sha="$upstream"
           else
-            upstream="$(gh api "repos/${UPSTREAM_REPO}/releases/latest" --jq '.tag_name')"
             sha="$(gh api "repos/${UPSTREAM_REPO}/commits/${upstream}" --jq '.sha')"
           fi
 
@@ -70,7 +65,7 @@ jobs:
             exit 1
           }
 
-          release="${REQUESTED_RELEASE:-v${version}-cn}"
+          release="${REQUESTED_RELEASE:-v${version}-cn-nightly}"
 
           should_build=true
           if [[ "${{ github.event_name }}" == "schedule" ]] &&
@@ -216,7 +211,7 @@ jobs:
           if-no-files-found: error
 
   release:
-    name: Publish verified Chinese release
+    name: Publish verified nightly release
     needs: [resolve, translation-gate, build, build-source]
     if: needs.resolve.outputs.should_build == 'true'
     runs-on: ubuntu-latest
@@ -240,12 +235,12 @@ jobs:
             find . -maxdepth 1 -type f ! -name SHA256SUMS -printf '%f\n' | sort | xargs sha256sum >SHA256SUMS
           )
           cat >release_notes.md <<EOF
-          ## Pi CLI/TUI 简体中文汉化版
+          ## Pi CLI/TUI 简体中文汉化版（实时更新版）
 
-          - 上游官方版本：\`v${UPSTREAM_VERSION}\`（commit \`${UPSTREAM_SHA:0:12}\`）
+          - 上游最新提交：\`${UPSTREAM_SHA:0:12}\`（main 分支，对应版本 v${UPSTREAM_VERSION}）
           - 翻译门禁：词表 \`pi-i18n/translations\` 全部条目在源码中 100% 唯一匹配后才允许发布
-          - 同步频率：每小时检查上游**正式 Release**，有新版自动构建发布
-          - 需要实时跟踪上游 \`main\` 最新提交的请使用实时更新版（\`*-cn-nightly\`）
+          - **实时更新版**：每小时跟随上游 \`main\` 最新提交构建，覆盖同名 tag
+          - 追求稳定请下载正式版（\`*-cn\`，见仓库 Releases 最新版）
 
           ### 下载
 
@@ -267,9 +262,9 @@ jobs:
         with:
           tag_name: ${{ needs.resolve.outputs.release_tag }}
           target_commitish: ${{ github.sha }}
-          name: "Pi v${{ needs.resolve.outputs.upstream_version }} 汉化版"
+          name: "Pi v${{ needs.resolve.outputs.upstream_version }} 汉化版（实时版）"
           body_path: release_notes.md
           files: dist/*
           overwrite_files: true
           fail_on_unmatched_files: true
-          make_latest: true
+          prerelease: true
