@@ -1,0 +1,7 @@
+{
+  "file": "packages/coding-agent/src/modes/interactive/components/mermaid.ts",
+  "description": "pi 汉化词表：packages/coding-agent/src/modes/interactive/components/mermaid.ts",
+  "replacements": {
+    "Mermaid diagram not rendered: ${art.warnings[0]}${suffix}": "Mermaid 图表未渲染：${art.warnings[0]}${suffix}"
+  }
+}

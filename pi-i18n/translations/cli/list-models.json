@@ -1,0 +1,7 @@
+{
+  "file": "packages/coding-agent/src/cli/list-models.ts",
+  "description": "pi 汉化词表：packages/coding-agent/src/cli/list-models.ts",
+  "replacements": {
+    "No models matching \"${searchPattern}\"": "没有与 \"${searchPattern}\" 匹配的模型"
+  }
+}

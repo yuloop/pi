@@ -1,0 +1,7 @@
+{
+  "file": "packages/coding-agent/src/modes/interactive/components/show-images-selector.ts",
+  "description": "pi 汉化词表：packages/coding-agent/src/modes/interactive/components/show-images-selector.ts",
+  "replacements": {
+    "Show images inline in terminal": "在终端中内联显示图片"
+  }
+}

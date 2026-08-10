@@ -1,0 +1,17 @@
+{
+  "file": "packages/coding-agent/src/modes/interactive/components/first-time-setup.ts",
+  "description": "pi 汉化词表：packages/coding-agent/src/modes/interactive/components/first-time-setup.ts",
+  "replacements": {
+    "Share anonymous usage data": "分享匿名使用数据",
+    "Don't share": "不分享",
+    "Welcome to ${APP_NAME}, the minimal coding agent.": "欢迎使用 ${APP_NAME}，极简编码智能体。",
+    "Pick a theme.": "选择一个主题。",
+    "Detected system appearance: ${this.options.detectedTheme}": "检测到系统外观：${this.options.detectedTheme}",
+    "Opt-in to anonymous usage data sharing?": "是否选择分享匿名使用数据？",
+    "Opting in stores a tracking identifier in settings.json and enables anonymous\\nusage analytics. This helps us to better debug, reproduce, and resolve issues\\nand bugs within Pi. You can observe what is shared using /privacy and make\\nchanges anytime in settings.json.": "选择分享会在 settings.json 中存储跟踪标识并启用匿名\\n使用统计。这有助于我们更好地调试、复现和解决 Pi 中的\\n问题与缺陷。你可以通过 /privacy 查看分享内容，并随时\\n在 settings.json 中更改设置。",
+    "skip setup": "跳过设置",
+    "navigate": "导航",
+    "continue": "继续",
+    "finish": "完成"
+  }
+}

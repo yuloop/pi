@@ -1,0 +1,9 @@
+{
+  "file": "packages/coding-agent/src/core/model-config.ts",
+  "description": "pi 汉化词表：packages/coding-agent/src/core/model-config.ts",
+  "replacements": {
+    "Unknown schema error": "未知的 schema 错误",
+    "Failed to load models.json: ${error instanceof Error ? error.message : error}\\n\\nFile: ${path}": "加载 models.json 失败：${error instanceof Error ? error.message : error}\\n\\n文件：${path}",
+    "Invalid models.json schema:\\n${errors}\\n\\nFile: ${path}": "models.json schema 无效：\\n${errors}\\n\\n文件：${path}"
+  }
+}

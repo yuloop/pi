@@ -1,0 +1,8 @@
+{
+  "file": "packages/coding-agent/src/modes/interactive/components/compaction-summary-message.ts",
+  "description": "pi 汉化词表：packages/coding-agent/src/modes/interactive/components/compaction-summary-message.ts",
+  "replacements": {
+    "**Compacted from ${tokenStr} tokens**\\n\\n": "**已从 ${tokenStr} tokens 压缩**\\n\\n",
+    "Compacted from ${tokenStr} tokens (": "已从 ${tokenStr} tokens 压缩（"
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "file": "packages/coding-agent/src/modes/interactive/components/thinking-selector.ts",
+  "description": "pi 汉化词表：packages/coding-agent/src/modes/interactive/components/thinking-selector.ts",
+  "replacements": {
+    "No reasoning": "不推理",
+    "Very brief reasoning (~1k tokens)": "极简推理（约 1k tokens）",
+    "Light reasoning (~2k tokens)": "轻量推理（约 2k tokens）",
+    "Moderate reasoning (~8k tokens)": "中等推理（约 8k tokens）",
+    "Deep reasoning (~16k tokens)": "深度推理（约 16k tokens）",
+    "Extra-high reasoning (~32k tokens)": "极高推理（约 32k tokens）",
+    "Maximum reasoning": "最大推理"
+  }
+}

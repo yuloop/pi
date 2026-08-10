@@ -1,0 +1,12 @@
+{
+  "file": "packages/coding-agent/src/core/resource-loader.ts",
+  "description": "pi 汉化词表：packages/coding-agent/src/core/resource-loader.ts",
+  "replacements": {
+    "Prompt template path does not exist": "提示词模板路径不存在",
+    "Theme path does not exist": "主题路径不存在",
+    "Extension path does not exist: ${resolved}": "扩展路径不存在：${resolved}",
+    "Warning: Could not read ${description} file ${input}: ${error}": "警告：无法读取${description}文件 ${input}：${error}",
+    "Tool \"${toolName}\" conflicts with ${existingOwner}": "工具 \"${toolName}\" 与 ${existingOwner} 冲突",
+    "Flag \"--${flagName}\" conflicts with ${existingOwner}": "标志 \"--${flagName}\" 与 ${existingOwner} 冲突"
+  }
+}

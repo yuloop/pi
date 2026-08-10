@@ -1,0 +1,7 @@
+{
+  "file": "packages/coding-agent/src/modes/interactive/components/theme-selector.ts",
+  "description": "pi 汉化词表：packages/coding-agent/src/modes/interactive/components/theme-selector.ts",
+  "replacements": {
+    "(current)": "（当前）"
+  }
+}

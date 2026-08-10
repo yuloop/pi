@@ -1,0 +1,8 @@
+{
+  "file": "packages/coding-agent/src/cli/file-processor.ts",
+  "description": "pi 汉化词表：packages/coding-agent/src/cli/file-processor.ts",
+  "replacements": {
+    "Error: File not found: ${absolutePath}": "错误：找不到文件：${absolutePath}",
+    "Error: Could not read file ${absolutePath}: ${message}": "错误：无法读取文件 ${absolutePath}：${message}"
+  }
+}

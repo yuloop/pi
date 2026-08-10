@@ -1,0 +1,33 @@
+{
+  "file": "packages/tui/src/keybindings.ts",
+  "description": "pi 汉化词表：packages/tui/src/keybindings.ts",
+  "replacements": {
+    "Select previous prompt history entry": "选择上一条提示历史",
+    "Select next prompt history entry": "选择下一条提示历史",
+    "Move cursor left": "光标左移",
+    "Move cursor right": "光标右移",
+    "Move cursor word left": "光标左移一个单词",
+    "Move cursor word right": "光标右移一个单词",
+    "Move to line start": "移动到行首",
+    "Move to line end": "移动到行尾",
+    "Jump forward to character": "向前跳转到指定字符",
+    "Jump backward to character": "向后跳转到指定字符",
+    "Page up": "上一页",
+    "Page down": "下一页",
+    "Delete character backward": "删除前一个字符",
+    "Delete character forward": "删除后一个字符",
+    "Delete word backward": "删除前一个单词",
+    "Delete word forward": "删除后一个单词",
+    "Delete to line start": "删除到行首",
+    "Delete to line end": "删除到行尾",
+    "Selection page up": "选区向上翻页",
+    "Selection page down": "选区向下翻页",
+    "Cancel selection": "取消选择",
+    "Scroll viewport up one page": "视口向上滚动一页",
+    "Scroll viewport down one page": "视口向下滚动一页",
+    "Scroll viewport up half a page": "视口向上滚动半页",
+    "Scroll viewport down half a page": "视口向下滚动半页",
+    "Jump to previous semantic prompt": "跳到上一条语义提示",
+    "Jump to next semantic prompt": "跳到下一条语义提示"
+  }
+}

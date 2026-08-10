@@ -1,0 +1,7 @@
+{
+  "file": "packages/coding-agent/src/modes/interactive/components/extension-input.ts",
+  "description": "pi 汉化词表：packages/coding-agent/src/modes/interactive/components/extension-input.ts",
+  "replacements": {
+    "${keyHint(\"tui.select.confirm\", \"submit\")}  ${keyHint(\"tui.select.cancel\", \"cancel\")}": "${keyHint(\"tui.select.confirm\", \"提交\")}  ${keyHint(\"tui.select.cancel\", \"取消\")}"
+  }
+}

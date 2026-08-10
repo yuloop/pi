@@ -1,0 +1,7 @@
+{
+  "file": "packages/coding-agent/src/core/project-trust.ts",
+  "description": "pi 汉化词表：packages/coding-agent/src/core/project-trust.ts",
+  "replacements": {
+    "Trust project folder?\\n${cwd}\\n\\nThis allows pi to load ${CONFIG_DIR_NAME} settings and resources, install missing project packages, and execute project extensions.": "信任项目文件夹？\\n${cwd}\\n\\n信任后 Pi 可以加载 ${CONFIG_DIR_NAME} 设置与资源、安装缺失的项目包，并执行项目扩展。"
+  }
+}

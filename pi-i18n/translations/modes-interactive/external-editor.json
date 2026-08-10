@@ -1,0 +1,7 @@
+{
+  "file": "packages/coding-agent/src/modes/interactive/external-editor.ts",
+  "description": "pi 汉化词表：packages/coding-agent/src/modes/interactive/external-editor.ts",
+  "replacements": {
+    "Launching external editor: ${options.command}\\nPi will resume when the editor exits.\\n": "正在启动外部编辑器：${options.command}\\n编辑器退出后 Pi 将恢复。\\n"
+  }
+}

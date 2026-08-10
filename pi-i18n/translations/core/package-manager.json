@@ -1,0 +1,12 @@
+{
+  "file": "packages/coding-agent/src/core/package-manager.ts",
+  "description": "pi 汉化词表：packages/coding-agent/src/core/package-manager.ts",
+  "replacements": {
+    "Installing ${source}...": "正在安装 ${source}...",
+    "Removing ${source}...": "正在移除 ${source}...",
+    "Unsupported install source: ${source}": "不支持的安装源：${source}",
+    "Path does not exist: ${resolved}": "路径不存在：${resolved}",
+    "Updating ${entry.source}...": "正在更新 ${entry.source}...",
+    "No matching package found for ${source}. Did you mean ${suggestion}?": "未找到与 ${source} 匹配的包。你是指 ${suggestion} 吗？"
+  }
+}

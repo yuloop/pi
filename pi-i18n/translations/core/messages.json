@@ -1,0 +1,10 @@
+{
+  "file": "packages/coding-agent/src/core/messages.ts",
+  "description": "pi 汉化词表：packages/coding-agent/src/core/messages.ts",
+  "replacements": {
+    "(no output)": "（无输出）",
+    "\\n\\n(command cancelled)": "\\n\\n（命令已取消）",
+    "\\n\\nCommand exited with code ${msg.exitCode}": "\\n\\n命令以退出码 ${msg.exitCode} 结束",
+    "\\n\\n[Output truncated. Full output: ${msg.fullOutputPath}]": "\\n\\n[输出已截断。完整输出：${msg.fullOutputPath}]"
+  }
+}

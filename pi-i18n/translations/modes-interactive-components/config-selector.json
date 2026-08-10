@@ -1,0 +1,21 @@
+{
+  "file": "packages/coding-agent/src/modes/interactive/components/config-selector.ts",
+  "description": "pi 汉化词表：packages/coding-agent/src/modes/interactive/components/config-selector.ts",
+  "replacements": {
+    "User settings": "用户设置",
+    "Project settings": "项目设置",
+    "Project Local Resources": "项目本地资源",
+    "Global Resources": "全局资源",
+    "switch mode": "切换模式",
+    "cycle inherit/+/-": "循环 继承/+/-",
+    "No resources found": "未找到资源",
+    "${CONFIG_DIR_NAME}/settings.json · inherited global resources are dimmed": "${CONFIG_DIR_NAME}/settings.json · 继承的全局资源以暗色显示",
+    "${entry.group.label}${inherited ? \" · inherited global\" : \"\"}": "${entry.group.label}${inherited ? \" · 继承自全局\" : \"\"}",
+    "User (${formatBaseDir(metadata.baseDir)})": "用户（${formatBaseDir(metadata.baseDir)}）",
+    "Project (${formatBaseDir(metadata.baseDir)})": "项目（${formatBaseDir(metadata.baseDir)}）",
+    "User (${formatBaseDir(agentDir)})": "用户（${formatBaseDir(agentDir)}）",
+    "Project (${CONFIG_DIR_NAME}/)": "项目（${CONFIG_DIR_NAME}/）",
+    "project load": "项目加载",
+    "project unload": "项目卸载"
+  }
+}

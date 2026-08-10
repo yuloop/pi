@@ -1,0 +1,13 @@
+{
+  "file": "packages/coding-agent/src/modes/interactive/components/model-selector.ts",
+  "description": "pi 汉化词表：packages/coding-agent/src/modes/interactive/components/model-selector.ts",
+  "replacements": {
+    "Refreshing model catalogs…": "正在刷新模型目录…",
+    "Only showing models from configured providers. Use /login to add providers.": "仅显示已配置提供商的模型。使用 /login 添加提供商。",
+    "Model catalogs refreshed.": "模型目录已刷新。",
+    "Could not refresh ${result.errors.keys().next().value}; showing cached models.": "无法刷新 ${result.errors.keys().next().value}；显示缓存模型。",
+    "Could not refresh ${result.errors.size} model catalogs (${[...result.errors.keys()].join(\", \")}); showing cached models.": "无法刷新 ${result.errors.size} 个模型目录（${[...result.errors.keys()].join(\", \")}）；显示缓存模型。",
+    "Could not refresh model catalogs: ${error instanceof Error ? error.message : String(error)}": "无法刷新模型目录：${error instanceof Error ? error.message : String(error)}",
+    "No matching models": "没有匹配的模型"
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "file": "packages/coding-agent/src/core/agent-session.ts",
+  "description": "pi 汉化词表：packages/coding-agent/src/core/agent-session.ts",
+  "replacements": {
+    "Cannot submit a prompt while compaction is in progress. Wait for compaction to finish and retry.": "压缩进行中无法提交提示词。请等待压缩完成后再试。",
+    "Already compacted": "已完成压缩",
+    "Nothing to compact (session too small)": "没有可压缩的内容（会话过小）",
+    "Retry cancelled": "重试已取消",
+    "Wait for the current response to finish before navigating the session tree.": "请等待当前响应完成后再浏览会话树。",
+    "No model available for summarization": "没有可用于总结的模型",
+    "Extension failed, blocking execution: ${String(err)}": "扩展失败，阻塞执行：${String(err)}",
+    "Run '/login ${model.provider}' to re-authenticate.": "运行 '/login ${model.provider}' 重新认证。",
+    "Authentication failed for \"${model.provider}\". ": "认证失败（\"${model.provider}\"）。",
+    "Context overflow recovery failed after one compact-and-retry attempt. Try reducing context or switching to a larger-context model.": "一次压缩并重试后仍无法恢复上下文溢出。请尝试减少上下文或切换到更大上下文的模型。"
+  }
+}

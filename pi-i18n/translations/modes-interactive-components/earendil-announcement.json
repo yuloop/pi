@@ -1,0 +1,8 @@
+{
+  "file": "packages/coding-agent/src/modes/interactive/components/earendil-announcement.ts",
+  "description": "pi 汉化词表：packages/coding-agent/src/modes/interactive/components/earendil-announcement.ts",
+  "replacements": {
+    "pi has joined Earendil": "pi 已加入 Earendil",
+    "Read the blog post:": "阅读博客文章："
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "file": "packages/coding-agent/src/modes/interactive/components/trust-selector.ts",
+  "description": "pi 汉化词表：packages/coding-agent/src/modes/interactive/components/trust-selector.ts",
+  "replacements": {
+    "Project trust": "项目信任",
+    "`Current session: ${options.projectTrusted ? \"trusted\" : \"untrusted\"}`": "`当前会话：${options.projectTrusted ? \"已信任\" : \"未信任\"}`",
+    "${label} (inherited from ${decision.path})": "${label}（继承自 ${decision.path}）"
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "file": "packages/coding-agent/src/core/model-runtime.ts",
+  "description": "pi 汉化词表：packages/coding-agent/src/core/model-runtime.ts",
+  "replacements": {
+    "Unknown provider: ${model.provider}": "未知提供商：${model.provider}",
+    "Provider id must not be empty.": "提供商 ID 不能为空。"
+  }
+}

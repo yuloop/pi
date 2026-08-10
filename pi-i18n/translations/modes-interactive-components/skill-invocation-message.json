@@ -1,0 +1,7 @@
+{
+  "file": "packages/coding-agent/src/modes/interactive/components/skill-invocation-message.ts",
+  "description": "pi 汉化词表：packages/coding-agent/src/modes/interactive/components/skill-invocation-message.ts",
+  "replacements": {
+    " (${keyText(\"app.tools.expand\")} to expand)": "（按 ${keyText(\"app.tools.expand\")} 展开）"
+  }
+}

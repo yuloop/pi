@@ -1,0 +1,8 @@
+{
+  "file": "packages/coding-agent/src/modes/interactive/components/branch-summary-message.ts",
+  "description": "pi 汉化词表：packages/coding-agent/src/modes/interactive/components/branch-summary-message.ts",
+  "replacements": {
+    "Branch summary (": "分支总结（",
+    "**Branch Summary**\\n\\n": "**分支总结**\\n\\n"
+  }
+}

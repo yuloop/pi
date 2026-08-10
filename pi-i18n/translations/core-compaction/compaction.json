@@ -1,0 +1,8 @@
+{
+  "file": "packages/coding-agent/src/core/compaction/compaction.ts",
+  "description": "pi 汉化词表：packages/coding-agent/src/core/compaction/compaction.ts",
+  "replacements": {
+    "No prior history.": "没有先前历史。",
+    "Summarization failed: ${response.errorMessage || \"Unknown error\"}": "总结失败：${response.errorMessage || \"未知错误\"}"
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "file": "packages/coding-agent/src/modes/interactive/components/login-dialog.ts",
+  "description": "pi 汉化词表：packages/coding-agent/src/modes/interactive/components/login-dialog.ts",
+  "replacements": {
+    "Login to ${providerName}": "登录 ${providerName}",
+    "Enter code: ${info.userCode}": "输入代码：${info.userCode}",
+    "(${keyHint(\"tui.select.cancel\", \"to cancel,\")} ${keyHint(\"tui.select.confirm\", \"to submit\")})": "（${keyHint(\"tui.select.cancel\", \"取消，\")} ${keyHint(\"tui.select.confirm\", \"提交\")}）",
+    "(${keyHint(\"tui.select.cancel\", \"to close\")})": "（${keyHint(\"tui.select.cancel\", \"关闭\")}）"
+  }
+}

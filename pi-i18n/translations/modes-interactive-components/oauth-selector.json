@@ -1,0 +1,15 @@
+{
+  "file": "packages/coding-agent/src/modes/interactive/components/oauth-selector.ts",
+  "description": "pi 汉化词表：packages/coding-agent/src/modes/interactive/components/oauth-selector.ts",
+  "replacements": {
+    "Select provider to configure:": "选择要配置的提供商：",
+    "Select provider to logout:": "选择要退出登录的提供商：",
+    "No providers available": "没有可用的提供商",
+    "No providers logged in. Use /login first.": "没有已登录的提供商。请先使用 /login。",
+    "No matching providers": "没有匹配的提供商",
+    "subscription configured": "已配置订阅",
+    "API key configured": "已配置 API 密钥",
+    "stored credential": "已存凭据",
+    "unconfigured": "未配置"
+  }
+}

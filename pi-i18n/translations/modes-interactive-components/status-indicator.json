@@ -1,0 +1,10 @@
+{
+  "file": "packages/coding-agent/src/modes/interactive/components/status-indicator.ts",
+  "description": "pi 汉化词表：packages/coding-agent/src/modes/interactive/components/status-indicator.ts",
+  "replacements": {
+    "Retrying (${attempt}/${maxAttempts}) in ${seconds}s... (${keyText(\"app.interrupt\")} to cancel)": "${attempt}/${maxAttempts} 次重试，${seconds} 秒后继续...（按 ${keyText(\"app.interrupt\")} 取消）",
+    "Compacting context... ${cancelHint}": "正在压缩上下文... ${cancelHint}",
+    "${reason === \"overflow\" ? \"Context overflow detected, \" : \"\"}Auto-compacting... ${cancelHint}": "${reason === \"overflow\" ? \"检测到上下文溢出，\" : \"\"}正在自动压缩... ${cancelHint}",
+    "Summarizing branch... (${keyText(\"app.interrupt\")} to cancel)": "正在总结分支...（按 ${keyText(\"app.interrupt\")} 取消）"
+  }
+}

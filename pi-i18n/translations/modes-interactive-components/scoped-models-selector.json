@@ -1,0 +1,16 @@
+{
+  "file": "packages/coding-agent/src/modes/interactive/components/scoped-models-selector.ts",
+  "description": "pi 汉化词表：packages/coding-agent/src/modes/interactive/components/scoped-models-selector.ts",
+  "replacements": {
+    "Session-only. ${keyText(\"app.models.save\")} to save to settings.": "仅本次会话有效。按 ${keyText(\"app.models.save\")} 保存到设置。",
+    "Model Name: ${selected.model.name}": "模型名称：${selected.model.name}",
+    "Model unavailable": "模型不可用",
+    "No matching models": "没有匹配的模型",
+    "${keyText(\"tui.select.confirm\")} toggle": "${keyText(\"tui.select.confirm\")} 切换",
+    "${keyText(\"app.models.enableAll\")} all": "${keyText(\"app.models.enableAll\")} 全部启用",
+    "${keyText(\"app.models.clearAll\")} clear": "${keyText(\"app.models.clearAll\")} 清空",
+    "${keyText(\"app.models.toggleProvider\")} provider": "${keyText(\"app.models.toggleProvider\")} 按提供商切换",
+    "${keyText(\"app.models.reorderUp\")}/${keyText(\"app.models.reorderDown\")} reorder": "${keyText(\"app.models.reorderUp\")}/${keyText(\"app.models.reorderDown\")} 重新排序",
+    "${keyText(\"app.models.save\")} save": "${keyText(\"app.models.save\")} 保存"
+  }
+}

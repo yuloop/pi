@@ -1,0 +1,9 @@
+{
+  "file": "packages/coding-agent/src/core/compaction/branch-summarization.ts",
+  "description": "pi 汉化词表：packages/coding-agent/src/core/compaction/branch-summarization.ts",
+  "replacements": {
+    "No content to summarize": "没有可总结的内容",
+    "Summarization failed": "总结失败",
+    "No summary generated": "未生成总结"
+  }
+}

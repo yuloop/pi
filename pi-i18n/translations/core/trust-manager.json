@@ -1,0 +1,9 @@
+{
+  "file": "packages/coding-agent/src/core/trust-manager.ts",
+  "description": "pi 汉化词表：packages/coding-agent/src/core/trust-manager.ts",
+  "replacements": {
+    "Trust parent folder (${parentPath})": "信任父文件夹（${parentPath}）",
+    "Trust (this session only)": "信任（仅本次会话）",
+    "Do not trust (this session only)": "不信任（仅本次会话）"
+  }
+}

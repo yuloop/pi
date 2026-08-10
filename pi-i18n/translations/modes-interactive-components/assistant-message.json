@@ -1,0 +1,10 @@
+{
+  "file": "packages/coding-agent/src/modes/interactive/components/assistant-message.ts",
+  "description": "pi 汉化词表：packages/coding-agent/src/modes/interactive/components/assistant-message.ts",
+  "replacements": {
+    "Response was truncated before completion.": "响应在完成前被截断。",
+    "Request was aborted": "请求已中止",
+    "Operation aborted": "操作已中止",
+    "Error: ${errorMsg}": "错误：${errorMsg}"
+  }
+}

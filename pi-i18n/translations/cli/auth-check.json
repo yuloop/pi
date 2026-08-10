@@ -1,0 +1,8 @@
+{
+  "file": "packages/coding-agent/src/cli/auth-check.ts",
+  "description": "pi 汉化词表：packages/coding-agent/src/cli/auth-check.ts",
+  "replacements": {
+    "Unable to resolve model \"${cliModel}\"": "无法解析模型 \"${cliModel}\"",
+    "Unable to resolve an auth provider": "无法解析认证提供商"
+  }
+}

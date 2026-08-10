@@ -1,0 +1,7 @@
+{
+  "file": "packages/tui/src/tui-alt-screen.ts",
+  "description": "pi 汉化词表：packages/tui/src/tui-alt-screen.ts",
+  "replacements": {
+    "Copied!": "已复制！"
+  }
+}

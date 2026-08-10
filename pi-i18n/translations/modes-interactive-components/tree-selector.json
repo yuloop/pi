@@ -1,0 +1,10 @@
+{
+  "file": "packages/coding-agent/src/modes/interactive/components/tree-selector.ts",
+  "description": "pi 汉化词表：packages/coding-agent/src/modes/interactive/components/tree-selector.ts",
+  "replacements": {
+    "(no content)": "（无内容）",
+    "[compaction: ${tokens}k tokens]": "[压缩：${tokens}k tokens]",
+    "[branch summary]: ": "[分支总结]：",
+    "${indent}${theme.fg(\"muted\", \"Label (empty to remove):\")}": "${indent}${theme.fg(\"muted\", \"标签（留空则移除）：\")}"
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "file": "packages/coding-agent/src/modes/interactive/components/session-selector.ts",
+  "description": "pi 汉化词表：packages/coding-agent/src/modes/interactive/components/session-selector.ts",
+  "replacements": {
+    "Resume Session (Current Folder)": "恢复会话（当前文件夹）",
+    "Resume Session (All)": "恢复会话（全部）",
+    "Cannot delete the currently active session": "无法删除当前活动会话",
+    "Session moved to trash": "会话已移入回收站",
+    "Session deleted": "会话已删除",
+    "Failed to delete: ${errorMessage}": "删除失败：${errorMessage}",
+    "Rename Session": "重命名会话",
+    "Failed to load sessions: ${message}": "加载会话失败：${message}",
+    "Delete session? ${keyHint(\"tui.select.confirm\", \"confirm\")} · ${keyHint(\"tui.select.cancel\", \"cancel\")}": "删除会话？${keyHint(\"tui.select.confirm\", \"确认\")} · ${keyHint(\"tui.select.cancel\", \"取消\")}",
+    "No sessions found": "未找到会话",
+    "No sessions in current folder. Press Tab to view all.": "当前文件夹中没有会话。按 Tab 查看全部。",
+    "No named sessions found. Press ${toggleKey} to show all.": "未找到命名会话。按 ${toggleKey} 显示全部。",
+    "No named sessions in current folder. Press ${toggleKey} to show all, or Tab to view all.": "当前文件夹中没有命名会话。按 ${toggleKey} 显示全部，或按 Tab 查看所有会话。"
+  }
+}

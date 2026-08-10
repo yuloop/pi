@@ -1,0 +1,10 @@
+{
+  "file": "packages/coding-agent/src/core/slash-commands.ts",
+  "description": "pi 汉化词表：packages/coding-agent/src/core/slash-commands.ts",
+  "replacements": {
+    "Open settings menu": "打开设置菜单",
+    "Enable/disable models for Ctrl+P cycling": "启用/禁用用于 Ctrl+P 循环的模型",
+    "Show changelog entries": "显示更新日志",
+    "Quit ${APP_NAME}": "退出 ${APP_NAME}"
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "file": "packages/coding-agent/src/core/provider-composer.ts",
+  "description": "pi 汉化词表：packages/coding-agent/src/core/provider-composer.ts",
+  "replacements": {
+    "Paste the authorization code": "粘贴授权码",
+    "Enter API key": "输入 API 密钥",
+    "API key for provider \"${providerId}\"": "提供商 \"${providerId}\" 的 API 密钥"
+  }
+}

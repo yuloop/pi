@@ -1,0 +1,9 @@
+{
+  "file": "packages/coding-agent/src/core/settings-manager.ts",
+  "description": "pi 汉化词表：packages/coding-agent/src/core/settings-manager.ts",
+  "replacements": {
+    "Invalid ${settingName} setting: ${String(value)}": "无效的 ${settingName} 设置：${String(value)}",
+    "Project is not trusted; refusing to write project settings": "项目未被信任，拒绝写入项目设置",
+    "Invalid httpIdleTimeoutMs setting: ${String(timeoutMs)}": "无效的 httpIdleTimeoutMs 设置：${String(timeoutMs)}"
+  }
+}

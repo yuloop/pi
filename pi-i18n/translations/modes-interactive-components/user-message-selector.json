@@ -1,0 +1,9 @@
+{
+  "file": "packages/coding-agent/src/modes/interactive/components/user-message-selector.ts",
+  "description": "pi 汉化词表：packages/coding-agent/src/modes/interactive/components/user-message-selector.ts",
+  "replacements": {
+    "Fork from Message": "从消息派生",
+    "Select a user message to copy the active path up to that point into a new session": "选择一条用户消息，将截至该点的活动路径复制到新会话",
+    "No user messages found": "未找到用户消息"
+  }
+}
