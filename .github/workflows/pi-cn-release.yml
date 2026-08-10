@@ -1,0 +1,264 @@
+name: Pi Chinese Release
+
+# pi（earendil-works/pi）汉化版自动构建发布流水线
+# 每小时检查上游 main 是否有新提交：有则同步 → 校验翻译词表 100% 匹配 → 应用汉化 → 构建 → 发布 <上游版本>-cn Release
+
+on:
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+    inputs:
+      upstream_ref:
+        description: "上游分支或 commit（留空为 main）"
+        required: false
+        type: string
+      release_tag:
+        description: "本仓库发布 tag（留空为 v<上游版本>-cn）"
+        required: false
+        type: string
+
+concurrency:
+  group: pi-cn-release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+env:
+  UPSTREAM_REPO: earendil-works/pi
+
+jobs:
+  resolve:
+    name: Resolve upstream commit
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      should_build: ${{ steps.resolve.outputs.should_build }}
+      upstream_ref: ${{ steps.resolve.outputs.upstream_ref }}
+      upstream_sha: ${{ steps.resolve.outputs.upstream_sha }}
+      upstream_version: ${{ steps.resolve.outputs.upstream_version }}
+      release_tag: ${{ steps.resolve.outputs.release_tag }}
+    steps:
+      - id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUESTED_UPSTREAM: ${{ github.event.inputs.upstream_ref }}
+          REQUESTED_RELEASE: ${{ github.event.inputs.release_tag }}
+        run: |
+          set -euo pipefail
+
+          upstream="${REQUESTED_UPSTREAM:-main}"
+
+          # 上游 main 最新 commit SHA
+          if [[ "$upstream" =~ ^[0-9a-f]{40}$ ]]; then
+            sha="$upstream"
+          else
+            sha="$(gh api "repos/${UPSTREAM_REPO}/commits/${upstream}" --jq '.sha')"
+          fi
+
+          # 上游版本号（packages/coding-agent/package.json）
+          version="$(gh api "repos/${UPSTREAM_REPO}/contents/packages/coding-agent/package.json?ref=${sha}" \
+            --jq '.content' | base64 -d | jq -r '.version')"
+
+          [[ -n "$version" && "$version" != "null" ]] || {
+            echo "无法从上游解析版本号" >&2
+            exit 1
+          }
+
+          release="${REQUESTED_RELEASE:-v${version}-cn}"
+
+          should_build=true
+          if [[ "${{ github.event_name }}" == "schedule" ]] &&
+             gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${release}" >/dev/null 2>&1; then
+            should_build=false
+          fi
+
+          echo "should_build=$should_build" >>"$GITHUB_OUTPUT"
+          echo "upstream_ref=$upstream" >>"$GITHUB_OUTPUT"
+          echo "upstream_sha=$sha" >>"$GITHUB_OUTPUT"
+          echo "upstream_version=$version" >>"$GITHUB_OUTPUT"
+          echo "release_tag=$release" >>"$GITHUB_OUTPUT"
+          echo "上游: ${UPSTREAM_REPO}@${sha:0:12} (v${version})；发布 tag: ${release}；需要构建: $should_build"
+
+  translation-gate:
+    name: Require complete translation match
+    needs: resolve
+    if: needs.resolve.outputs.should_build == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Sync upstream main
+        run: |
+          set -euo pipefail
+          git remote add upstream "https://github.com/${UPSTREAM_REPO}.git"
+          git fetch --depth 1 upstream "${{ needs.resolve.outputs.upstream_ref }}"
+          git merge --no-edit FETCH_HEAD
+          git log --oneline -3
+      - name: Verify every translation entry still matches uniquely
+        run: |
+          set -euo pipefail
+          python3 pi-i18n/apply_translations.py verify \
+            --translations pi-i18n/translations --source . --strict --min-match-rate 1
+
+  build:
+    name: Build translated pi (${{ matrix.platform }})
+    needs: [resolve, translation-gate]
+    if: needs.resolve.outputs.should_build == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [linux-x64, windows-x64]
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev fd-find ripgrep
+          sudo ln -s "$(which fdfind)" /usr/local/bin/fd
+
+      - name: Sync upstream main
+        run: |
+          set -euo pipefail
+          git remote add upstream "https://github.com/${UPSTREAM_REPO}.git"
+          git fetch --depth 1 upstream "${{ needs.resolve.outputs.upstream_ref }}"
+          git merge --no-edit FETCH_HEAD
+      - name: Verify translation gate (100% match required)
+        run: |
+          set -euo pipefail
+          python3 pi-i18n/apply_translations.py verify \
+            --translations pi-i18n/translations --source . --strict --min-match-rate 1
+      - name: Apply translations
+        run: |
+          set -euo pipefail
+          python3 pi-i18n/apply_translations.py apply \
+            --translations pi-i18n/translations --source . --strict --min-match-rate 1
+      - name: Build ${{ matrix.platform }} portable binary
+        run: |
+          set -euo pipefail
+          ./scripts/build-binaries.sh \
+            --offline-model-data \
+            --platform "${{ matrix.platform }}" \
+            --out "${GITHUB_WORKSPACE}/dist-binaries"
+      - name: Package binary artifact
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          VERSION: ${{ needs.resolve.outputs.upstream_version }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          if [[ "$PLATFORM" == windows-* ]]; then
+            (cd dist-binaries/windows-x64 && zip -r "${GITHUB_WORKSPACE}/dist/pi-cn-${VERSION}-windows-x64.zip" .)
+          else
+            tar -czf "dist/pi-cn-${VERSION}-linux-x64.tar.gz" -C dist-binaries/linux-x64 .
+          fi
+      - uses: actions/upload-artifact@v7
+        with:
+          name: pi-cn-${{ matrix.platform }}
+          path: dist/*
+          if-no-files-found: error
+
+  build-source:
+    name: Package translated source archive
+    needs: [resolve, translation-gate]
+    if: needs.resolve.outputs.should_build == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Sync upstream main and apply translations
+        run: |
+          set -euo pipefail
+          git remote add upstream "https://github.com/${UPSTREAM_REPO}.git"
+          git fetch --depth 1 upstream "${{ needs.resolve.outputs.upstream_ref }}"
+          git merge --no-edit FETCH_HEAD
+          python3 pi-i18n/apply_translations.py apply \
+            --translations pi-i18n/translations --source . --strict --min-match-rate 1
+      - name: Package source archive
+        env:
+          VERSION: ${{ needs.resolve.outputs.upstream_version }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          tar -czf "dist/pi-cn-${VERSION}-source.tar.gz" \
+            --exclude='.git' --exclude='node_modules' --exclude='dist' \
+            --transform "s,^,pi-cn-${VERSION}/," \
+            .
+      - uses: actions/upload-artifact@v7
+        with:
+          name: pi-cn-source
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    name: Publish verified Chinese release
+    needs: [resolve, translation-gate, build, build-source]
+    if: needs.resolve.outputs.should_build == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: "pi-cn-*"
+          path: dist
+          merge-multiple: true
+      - name: Create checksums and release notes
+        env:
+          RELEASE_TAG: ${{ needs.resolve.outputs.release_tag }}
+          UPSTREAM_VERSION: ${{ needs.resolve.outputs.upstream_version }}
+          UPSTREAM_SHA: ${{ needs.resolve.outputs.upstream_sha }}
+        run: |
+          set -euo pipefail
+          (
+            cd dist
+            find . -maxdepth 1 -type f ! -name SHA256SUMS -printf '%f\n' | sort | xargs sha256sum >SHA256SUMS
+          )
+          cat >release_notes.md <<EOF
+          ## Pi CLI/TUI 简体中文汉化版
+
+          - 上游官方版本：\`v${UPSTREAM_VERSION}\`（commit \`${UPSTREAM_SHA:0:12}\`）
+          - 翻译门禁：词表 \`pi-i18n/translations\` 全部条目在源码中 100% 唯一匹配后才允许发布
+          - 同步频率：每小时自动检查上游 \`main\` 分支
+
+          ### 下载
+
+          | 平台 | 文件 |
+          |---|---|
+          | Linux x64 | \`pi-cn-${UPSTREAM_VERSION}-linux-x64.tar.gz\` |
+          | Windows x64 | \`pi-cn-${UPSTREAM_VERSION}-windows-x64.zip\` |
+          | 汉化源码 | \`pi-cn-${UPSTREAM_VERSION}-source.tar.gz\` |
+
+          所有文件的 SHA-256 摘要见 \`SHA256SUMS\`。
+
+          ### 安装与更新
+
+          详见仓库 \`pi-i18n/README.md\`。
+
+          > 本项目是社区维护的非官方汉化构建，与 pi 官方团队无隶属关系。
+          EOF
+      - uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ needs.resolve.outputs.release_tag }}
+          target_commitish: ${{ github.sha }}
+          name: "Pi v${{ needs.resolve.outputs.upstream_version }} 汉化版"
+          body_path: release_notes.md
+          files: dist/*
+          overwrite_files: true
+          fail_on_unmatched_files: true
+          make_latest: true
