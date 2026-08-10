@@ -146,6 +146,11 @@ jobs:
           set -euo pipefail
           python3 pi-i18n/apply_translations.py apply \
             --translations pi-i18n/translations --source . --strict --min-match-rate 1
+      - name: Hydrate model data
+        run: |
+          set -euo pipefail
+          npm ci
+          npm run hydrate:model-data
       - name: Build ${{ matrix.platform }} portable binary
         run: |
           set -euo pipefail
