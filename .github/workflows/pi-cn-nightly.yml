@@ -68,9 +68,16 @@ jobs:
           release="${REQUESTED_RELEASE:-v${version}-cn-nightly}"
 
           should_build=true
+          prev_sha=""
           if [[ "${{ github.event_name }}" == "schedule" ]] &&
              gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${release}" >/dev/null 2>&1; then
-            should_build=false
+            # tag 已存在：读取上次构建记录的上游 SHA（release body 中反引号包裹的 12 位 hex）
+            # 与当前上游 SHA 比较：相同→跳过；不同→重建覆盖同名 release；提取失败→保守重建
+            body="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${release}" --jq '.body' 2>/dev/null || true)"
+            prev_sha="$(printf '%s' "$body" | grep -oE '`[0-9a-f]{12}`' | head -1 | tr -d '`' || true)"
+            if [[ -n "$prev_sha" && "$prev_sha" == "${sha:0:12}" ]]; then
+              should_build=false
+            fi
           fi
 
           echo "should_build=$should_build" >>"$GITHUB_OUTPUT"
@@ -78,7 +85,7 @@ jobs:
           echo "upstream_sha=$sha" >>"$GITHUB_OUTPUT"
           echo "upstream_version=$version" >>"$GITHUB_OUTPUT"
           echo "release_tag=$release" >>"$GITHUB_OUTPUT"
-          echo "上游: ${UPSTREAM_REPO}@${sha:0:12} (v${version})；发布 tag: ${release}；需要构建: $should_build"
+          echo "上游: ${UPSTREAM_REPO}@${sha:0:12} (v${version})；发布 tag: ${release}；需要构建: $should_build；上次构建 SHA: ${prev_sha:-无}；当前 SHA: ${sha:0:12}"
 
   translation-gate:
     name: Require complete translation match
