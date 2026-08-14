@@ -1,0 +1,30 @@
+name: Pi Sync Upstream
+on:
+  schedule:
+    - cron: "5 * * * *"   # 每小时 :05，错开其他流水线
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Merge upstream into main
+        run: |
+          set -euo pipefail
+          git config user.name "yuloop"
+          git config user.email "yuloop@users.noreply.github.com"
+          git remote add upstream "https://github.com/earendil-works/pi.git"
+          git fetch upstream main
+          # 无新提交 → 静默退出（不产生任何 commit）
+          if git merge-base --is-ancestor upstream/main HEAD; then
+            echo "上游无新提交，跳过"
+            exit 0
+          fi
+          # fork 关系、共享历史：普通 merge 即可；上游不动 pi-i18n/ 和 .github/workflows/pi-cn-*，不会产生源码冲突
+          git merge --no-edit FETCH_HEAD
+          git push origin main
