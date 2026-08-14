@@ -101,7 +101,7 @@ jobs:
         run: |
           set -euo pipefail
           git remote add upstream "https://github.com/${UPSTREAM_REPO}.git"
-          git fetch --depth 1 upstream "${{ needs.resolve.outputs.upstream_ref }}"
+          git fetch upstream "${{ needs.resolve.outputs.upstream_ref }}"
           git merge --no-edit FETCH_HEAD
           git log --oneline -3
       - name: Verify every translation entry still matches uniquely
@@ -141,7 +141,7 @@ jobs:
         run: |
           set -euo pipefail
           git remote add upstream "https://github.com/${UPSTREAM_REPO}.git"
-          git fetch --depth 1 upstream "${{ needs.resolve.outputs.upstream_ref }}"
+          git fetch upstream "${{ needs.resolve.outputs.upstream_ref }}"
           git merge --no-edit FETCH_HEAD
       - name: Verify translation gate (100% match required)
         run: |
@@ -197,7 +197,7 @@ jobs:
         run: |
           set -euo pipefail
           git remote add upstream "https://github.com/${UPSTREAM_REPO}.git"
-          git fetch --depth 1 upstream "${{ needs.resolve.outputs.upstream_ref }}"
+          git fetch upstream "${{ needs.resolve.outputs.upstream_ref }}"
           git merge --no-edit FETCH_HEAD
           python3 pi-i18n/apply_translations.py apply \
             --translations pi-i18n/translations --source . --strict --min-match-rate 1
