@@ -2,13 +2,13 @@
   "file": "packages/coding-agent/src/cli/auth-command.ts",
   "description": "pi 汉化词表：packages/coding-agent/src/cli/auth-command.ts",
   "replacements": {
-    "Unknown auth command \"${args[1] ?? \"\"}\". Use \"pi auth print-api-key\", \"pi auth print-bearer-token\", or \"pi auth check\".": "未知的 auth 命令 \"${args[1] ?? \"\"}\"。请使用 \"pi auth print-api-key\"、\"pi auth print-bearer-token\" 或 \"pi auth check\"。",
     "--min-expiry is only supported by print-bearer-token": "--min-expiry 仅 print-bearer-token 支持",
     "--min-expiry must use a duration such as 30m or 1h": "--min-expiry 必须使用时长格式，如 30m 或 1h",
     "${arg} is only supported by auth check": "${arg} 仅 auth check 支持",
     "Unknown option --${option} for \"${getAuthCommandName(kind)}\".": "未知选项 --${option}（用于 \"${getAuthCommandName(kind)}\"）。",
     "Auth commands only accept --provider and --model": "auth 命令只接受 --provider 与 --model",
     "Auth checks require --provider <provider> or --model <model>": "auth check 需要 --provider <provider> 或 --model <model>",
-    "Credential printing requires --provider <provider> or --model <model>": "打印凭据需要 --provider <provider> 或 --model <model>"
+    "Credential printing requires --provider <provider> or --model <model>": "打印凭据需要 --provider <provider> 或 --model <model>",
+    "Unknown auth command \"${args[1] ?? \"\"}\". Use \"${APP_NAME} auth print-api-key\", \"${APP_NAME} auth print-bearer-token\", or \"${APP_NAME} auth check\".": "未知的 auth 命令 \"${args[1] ?? \"\"}\"。请使用 \"${APP_NAME} auth print-api-key\"、\"${APP_NAME} auth print-bearer-token\" 或 \"${APP_NAME} auth check\"。"
   }
 }

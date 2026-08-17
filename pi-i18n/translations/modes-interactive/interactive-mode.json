@@ -102,7 +102,6 @@
     "\"Sign in with an account\"": "\"使用账号登录\"",
     "\"Sign in with an API key\"": "\"使用 API 密钥登录\"",
     "\"You can also use an AWS profile, IAM keys, or role-based credentials.\"": "\"也可以使用 AWS profile、IAM 密钥或基于角色的凭据。\"",
-    "`${providerOption.method?.name ?? \"Authentication\"} is configured outside pi.`": "`${providerOption.method?.name ?? \"认证\"}已在 pi 之外配置。`",
     "`${actionLabel}. Credentials saved to ${getAuthPath()}`": "`${actionLabel}。凭据已保存到 ${getAuthPath()}`",
     "`${actionLabel}. Selected ${selectedModel.id}. Credentials saved to ${getAuthPath()}`": "`${actionLabel}。已选择 ${selectedModel.id}。凭据已保存到 ${getAuthPath()}`",
     "`${actionLabel}, but no default model is configured for provider \"${providerId}\". Use /model to select a model.`": "`${actionLabel}，但提供商 \"${providerId}\" 未配置默认模型。请用 /model 选择模型。`",
@@ -114,7 +113,6 @@
     "`${actionLabel}, but its model catalog could not be refreshed: ${error instanceof Error ? error.message : String(error)}`": "`${actionLabel}，但其模型目录刷新失败：${error instanceof Error ? error.message : String(error)}`",
     "`Reload failed: ${error instanceof Error ? error.message : String(error)}`": "`重载失败：${error instanceof Error ? error.message : String(error)}`",
     "`This project is not trusted. Project ${CONFIG_DIR_NAME} resources and packages are ignored. Use /trust to save a trust decision, then restart pi.`": "`该项目未被信任。项目 ${CONFIG_DIR_NAME} 资源与包将被忽略。请用 /trust 保存信任决定，然后重启 pi。`",
-    "`Saved trust decision: ${selection.trusted ? \"trusted\" : \"untrusted\"}. Restart pi for this to take effect.`": "`已保存信任决定：${selection.trusted ? \"已信任\" : \"未信任\"}。重启 pi 后生效。`",
     "`Could not save project trust after reload: ${error instanceof Error ? error.message : String(error)}`": "`重载后无法保存项目信任：${error instanceof Error ? error.message : String(error)}`",
     "`Pi can explain its own features and look up its docs. Ask it how to use or extend Pi.`": "`Pi 能解释自身功能并查阅文档，可以问它如何使用或扩展 Pi。`",
     "`Press ${keyText(\"app.tools.expand\")} to show full startup help and loaded resources.`": "`按 ${keyText(\"app.tools.expand\")} 查看完整启动帮助与已加载资源。`",
@@ -130,6 +128,8 @@
     "\"Compaction cancelled\"": "\"压缩已取消\"",
     "`↳ ${dequeueHint} to edit all queued messages`": "`↳ ${dequeueHint} 编辑全部已排队消息`",
     "\"Failed to fork session\"": "\"创建派生会话失败\"",
-    "\"Failed to resume session\"": "\"恢复会话失败\""
+    "\"Failed to resume session\"": "\"恢复会话失败\"",
+    "`${providerOption.method?.name ?? \"Authentication\"} is configured outside ${APP_NAME}.`": "`${providerOption.method?.name ?? \"认证\"}已在 ${APP_NAME} 之外配置。`",
+    "`Saved trust decision: ${selection.trusted ? \"trusted\" : \"untrusted\"}. Restart ${APP_NAME} for this to take effect.`": "`已保存信任决定：${selection.trusted ? \"已信任\" : \"未信任\"}。重启 ${APP_NAME} 后生效。`"
   }
 }

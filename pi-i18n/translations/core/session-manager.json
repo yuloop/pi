@@ -3,7 +3,7 @@
   "description": "pi 汉化词表：packages/coding-agent/src/core/session-manager.ts",
   "replacements": {
     "(no messages)": "（无消息）",
-    "Session file is not a valid pi session: ${explicitPath}": "会话文件不是有效的 pi 会话：${explicitPath}",
-    "Cannot fork: source session file is empty or invalid: ${resolvedSourcePath}": "无法派生：源会话文件为空或无效：${resolvedSourcePath}"
+    "Cannot fork: source session file is empty or invalid: ${resolvedSourcePath}": "无法派生：源会话文件为空或无效：${resolvedSourcePath}",
+    "Session file is not a valid ${APP_NAME} session: ${explicitPath}": "会话文件不是有效的 ${APP_NAME} 会话：${explicitPath}"
   }
 }
