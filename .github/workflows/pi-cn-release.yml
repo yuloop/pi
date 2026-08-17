@@ -259,6 +259,20 @@ jobs:
 
           ### 安装与更新
 
+          ### 一键安装（正式版）
+
+          Windows PowerShell：
+
+          \`\`\`powershell
+          powershell -Command "irm https://raw.githubusercontent.com/yuloop/pi/main/pi-i18n/install.ps1 | iex"
+          \`\`\`
+
+          Linux / WSL：
+
+          \`\`\`bash
+          curl -fsSL https://raw.githubusercontent.com/yuloop/pi/main/pi-i18n/install.sh | bash
+          \`\`\`
+
           详见仓库 \`pi-i18n/README.md\`。
 
           > 本项目是社区维护的非官方汉化构建，与 pi 官方团队无隶属关系。

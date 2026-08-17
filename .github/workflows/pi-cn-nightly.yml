@@ -1,7 +1,8 @@
 name: Pi Chinese Nightly
 
 # pi（earendil-works/pi）汉化版【实时更新版】自动构建发布流水线（nightly）
-# 每小时检查上游 main 最新提交：有变化则同步 → 校验翻译词表 100% 匹配 → 应用汉化 → 构建 → 发布 v<上游版本>-cn-nightly 预览版
+# 每小时检查上游 main 最新提交：有变化则同步 → 校验翻译词表 100% 匹配 → 应用汉化 → 构建 → 发布 v<上游版本>-cn-nightly-<sha12> 预览版
+# tag 唯一化：每次上游新提交发布全新 tag（含上游 commit sha 前 12 位），发布后自动删除旧预览版，Releases 页面只保留最新 1 个预览条目
 # 正式版见 pi-cn-release.yml（跟随上游正式 Release）
 
 on:
@@ -14,7 +15,7 @@ on:
         required: false
         type: string
       release_tag:
-        description: "本仓库发布 tag（留空为 v<上游版本>-cn-nightly）"
+        description: "本仓库发布 tag（留空为 v<上游版本>-cn-nightly-<sha12>）"
         required: false
         type: string
 
@@ -65,19 +66,19 @@ jobs:
             exit 1
           }
 
-          release="${REQUESTED_RELEASE:-v${version}-cn-nightly}"
+          release="${REQUESTED_RELEASE:-v${version}-cn-nightly-${sha:0:12}}"
+
+          # tag 字符校验：仅允许字母数字与 . _ -（sha 后缀均为合法字符；防 dispatch 注入非法 tag）
+          [[ "$release" =~ ^[A-Za-z0-9._-]+$ ]] || {
+            echo "release tag 含非法字符: ${release}" >&2
+            exit 1
+          }
 
           should_build=true
-          prev_sha=""
           if [[ "${{ github.event_name }}" == "schedule" ]] &&
              gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${release}" >/dev/null 2>&1; then
-            # tag 已存在：读取上次构建记录的上游 SHA（release body 中反引号包裹的 12 位 hex）
-            # 与当前上游 SHA 比较：相同→跳过；不同→重建覆盖同名 release；提取失败→保守重建
-            body="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${release}" --jq '.body' 2>/dev/null || true)"
-            prev_sha="$(printf '%s' "$body" | grep -oE '`[0-9a-f]{12}`' | head -1 | tr -d '`' || true)"
-            if [[ -n "$prev_sha" && "$prev_sha" == "${sha:0:12}" ]]; then
-              should_build=false
-            fi
+            # tag 内含上游 commit sha（12 位 hex），天然防重复构建：同名 tag 已存在即跳过
+            should_build=false
           fi
 
           echo "should_build=$should_build" >>"$GITHUB_OUTPUT"
@@ -85,7 +86,7 @@ jobs:
           echo "upstream_sha=$sha" >>"$GITHUB_OUTPUT"
           echo "upstream_version=$version" >>"$GITHUB_OUTPUT"
           echo "release_tag=$release" >>"$GITHUB_OUTPUT"
-          echo "上游: ${UPSTREAM_REPO}@${sha:0:12} (v${version})；发布 tag: ${release}；需要构建: $should_build；上次构建 SHA: ${prev_sha:-无}；当前 SHA: ${sha:0:12}"
+          echo "上游: ${UPSTREAM_REPO}@${sha:0:12} (v${version})；发布 tag: ${release}；需要构建: $should_build"
 
   translation-gate:
     name: Require complete translation match
@@ -252,7 +253,7 @@ jobs:
 
           - 上游最新提交：\`${UPSTREAM_SHA:0:12}\`（main 分支，对应版本 v${UPSTREAM_VERSION}）
           - 翻译门禁：词表 \`pi-i18n/translations\` 全部条目在源码中 100% 唯一匹配后才允许发布
-          - **实时更新版**：每小时跟随上游 \`main\` 最新提交构建，覆盖同名 tag
+          - **实时更新版**：每小时跟随上游 \`main\` 最新提交构建，每次上游新提交发布新 tag，自动清理旧预览版（页面只保留最新 1 个预览条目）
           - 追求稳定请下载正式版（\`*-cn\`，见仓库 Releases 最新版）
 
           ### 下载
@@ -266,6 +267,20 @@ jobs:
           所有文件的 SHA-256 摘要见 \`SHA256SUMS\`。
 
           ### 安装与更新
+
+          ### 一键安装（预览版）
+
+          Windows PowerShell：
+
+          \`\`\`powershell
+          powershell -Command "irm https://raw.githubusercontent.com/yuloop/pi/main/pi-i18n/install-preview.ps1 | iex"
+          \`\`\`
+
+          Linux / WSL：
+
+          \`\`\`bash
+          curl -fsSL https://raw.githubusercontent.com/yuloop/pi/main/pi-i18n/install.sh | bash -s -- --preview
+          \`\`\`
 
           详见仓库 \`pi-i18n/README.md\`。
 
@@ -281,3 +296,15 @@ jobs:
           overwrite_files: true
           fail_on_unmatched_files: true
           prerelease: true
+      - name: Delete outdated preview releases
+        env:
+          GH_TOKEN: ${{ secrets.YU_TOKEN }}
+          CURRENT_TAG: ${{ needs.resolve.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          gh api "repos/${GITHUB_REPOSITORY}/releases?per_page=100" --paginate \
+            --jq '.[] | select(.prerelease == true and .draft == false and .tag_name != env.CURRENT_TAG and (.tag_name | contains("-cn-nightly"))) | .id' \
+            | while read -r id; do
+                echo "deleting outdated preview release id=$id"
+                gh api -X DELETE "repos/${GITHUB_REPOSITORY}/releases/$id" || echo "delete failed id=$id"
+              done

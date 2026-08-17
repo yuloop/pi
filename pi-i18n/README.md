@@ -12,7 +12,43 @@
 
 ## 汉化版安装
 
-从 [Releases](https://github.com/yuloop/pi/releases) 页面下载对应平台的汉化包（tag 形如 `v0.84.1-cn`，`0.84.1` 为上游版本号）。
+### 一键安装（推荐）
+
+**正式版**（跟随上游正式 Release，稳定）：
+
+Windows PowerShell：
+
+```powershell
+powershell -Command "irm https://raw.githubusercontent.com/yuloop/pi/main/pi-i18n/install.ps1 | iex"
+```
+
+Linux（含 WSL）：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/yuloop/pi/main/pi-i18n/install.sh | bash
+```
+
+**实时预览版**（跟随上游 `main` 每提交构建，Releases 页面只保留最新 1 个预览条目）：
+
+Windows PowerShell：
+
+```powershell
+powershell -Command "irm https://raw.githubusercontent.com/yuloop/pi/main/pi-i18n/install-preview.ps1 | iex"
+```
+
+Linux（含 WSL）：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/yuloop/pi/main/pi-i18n/install.sh | bash -s -- --preview
+```
+
+> 说明：预览版重跑同一命令即更新；正式版与预览版安装目录相同（`~/.pi-cn` / `%LOCALAPPDATA%\pi-cn`），互斥安装属正常（同一时刻用一条线）。
+
+### 手动安装（下载 Releases 包）
+
+以下为手动方式，推荐上面的一键安装。
+
+从 [Releases](https://github.com/yuloop/pi/releases) 页面下载对应平台的汉化包（tag 形如 `v0.84.1-cn`，`0.84.1` 为上游版本号，预览版 tag 形如 `v0.84.1-cn-nightly-<sha12>`）。
 
 ### Linux x64（含 WSL）
 
@@ -48,6 +84,7 @@ node packages/coding-agent/dist/cli.js
 
 汉化版每个小时自动跟随上游同步（上游有新提交时自动发布新 Release，tag 版本号随之更新）。更新方式：
 
+- **一键安装（推荐）**：重跑上面的一键安装命令即自动更新到最新版；
 - **重新下载**：到 [Releases](https://github.com/yuloop/pi/releases) 下载最新版，覆盖解压目录即可；
 - **Linux 提示**：替换 `~/.pi-cn` 目录下的文件后重新运行；
 - 汉化版配置与官方版共用同一配置目录（`~/.pi/agent`），更新不会丢失会话与设置。
