@@ -8,6 +8,9 @@
     "Moderate reasoning (~8k tokens)": "中等推理（约 8k tokens）",
     "Deep reasoning (~16k tokens)": "深度推理（约 16k tokens）",
     "Extra-high reasoning (~32k tokens)": "极高推理（约 32k tokens）",
-    "Maximum reasoning": "最大推理"
+    "Maximum reasoning": "最大推理",
+    "\"Thinking Level\"": "思考级别",
+    "`${keyDisplayText(\"app.thinking.cycle\")} cycles thinking levels in-session`": "`${keyDisplayText(\"app.thinking.cycle\")} 会话内循环切换思考级别`",
+    "  Enter to select · Ctrl+S to set as default · Esc to cancel": "  回车选择 · Ctrl+S 设为默认 · Esc 取消"
   }
 }
