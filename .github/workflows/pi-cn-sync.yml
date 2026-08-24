@@ -25,6 +25,12 @@ jobs:
             echo "上游无新提交，跳过"
             exit 0
           fi
-          # fork 关系、共享历史：普通 merge 即可；上游不动 pi-i18n/ 和 .github/workflows/pi-cn-*，不会产生源码冲突
-          git merge --no-edit FETCH_HEAD
+          # fork 关系、共享历史：普通 merge 即可
+          # --no-commit：暂存 merge 不自动提交，给下面的 restore 机会
+          # 上游带入的 .github/workflows 文件（如 build-binaries.yml）需要 workflows 权限才能 push
+          # GITHUB_TOKEN 只有 contents: write，没有 workflows 权限，
+          # 所以 merge 后 restore 本仓库的 workflow 目录，防止 push 被拒
+          git merge --no-commit --no-edit FETCH_HEAD
+          git restore --source=HEAD --staged --worktree .github/workflows
+          git commit --no-edit || echo "无变更，跳过提交"
           git push origin main
