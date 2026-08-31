@@ -33,7 +33,7 @@ jobs:
           git config merge.ours.driver true
           printf '.github/workflows/build-binaries.yml merge=ours\n' >> .git/info/attributes
           printf 'packages/ai/src/providers/cloudflare-ai-gateway.ts merge=ours\n' >> .git/info/attributes
-          git merge --no-commit --no-edit FETCH_HEAD
+          git merge --allow-unrelated-histories --no-commit --no-edit FETCH_HEAD
           git restore --source=HEAD --staged --worktree .github/workflows
           git commit --no-edit || echo "无变更，跳过提交"
           git push origin main
