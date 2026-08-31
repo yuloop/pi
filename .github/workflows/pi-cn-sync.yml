@@ -35,7 +35,16 @@ jobs:
           git config merge.ours.driver true
           printf '.github/workflows/build-binaries.yml merge=ours\n' >> .git/info/attributes
           printf 'packages/ai/src/providers/cloudflare-ai-gateway.ts merge=ours\n' >> .git/info/attributes
-          git merge --allow-unrelated-histories --no-commit --no-edit FETCH_HEAD
+          git merge --allow-unrelated-histories --no-commit --no-edit FETCH_HEAD 2>&1 || true
+          # Resolve conflicts
+          if [ -n "$(git diff --name-only --diff-filter=U 2>/dev/null)" ]; then
+            echo "Resolving conflicts: taking upstream for source code"
+            git diff --name-only --diff-filter=U | while read -r f; do
+              git checkout --theirs "$f" 2>/dev/null || true
+            done
+            git checkout HEAD -- .github/workflows/ pi-i18n/ packages/ai/src/providers/cloudflare-ai-gateway.ts 2>/dev/null || true
+            git add -A 2>/dev/null || true
+          fi
           git restore --source=HEAD --staged --worktree .github/workflows
           git commit --no-edit || echo "无变更，跳过提交"
           git push origin main

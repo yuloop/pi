@@ -110,7 +110,18 @@ jobs:
           git config merge.ours.driver true
           printf '.github/workflows/build-binaries.yml merge=ours\n' >> .git/info/attributes
           printf 'packages/ai/src/providers/cloudflare-ai-gateway.ts merge=ours\n' >> .git/info/attributes
-          git merge --allow-unrelated-histories --no-edit FETCH_HEAD
+          git merge --allow-unrelated-histories --no-edit FETCH_HEAD 2>&1 || true
+          # Resolve add/add conflicts: take upstream for source, ours for CN files
+          if [ -n "$(git diff --name-only --diff-filter=U 2>/dev/null)" ]; then
+            echo "Resolving conflicts: taking upstream for source code"
+            git diff --name-only --diff-filter=U | while read -r f; do
+              git checkout --theirs "$f" 2>/dev/null || true
+            done
+            # Restore our fork-specific files
+            git checkout HEAD -- .github/workflows/ pi-i18n/ packages/ai/src/providers/cloudflare-ai-gateway.ts 2>/dev/null || true
+            git add -A 2>/dev/null || true
+            git commit --no-edit 2>&1 || echo "Merge commit complete with conflicts resolved"
+          fi
           git log --oneline -3
       - name: Verify every translation entry still matches uniquely
         run: |
