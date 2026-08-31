@@ -30,6 +30,8 @@ jobs:
           # 上游带入的 .github/workflows 文件（如 build-binaries.yml）需要 workflows 权限才能 push
           # GITHUB_TOKEN 只有 contents: write，没有 workflows 权限，
           # 所以 merge 后 restore 本仓库的 workflow 目录，防止 push 被拒
+          git config user.name "yuloop"
+          git config user.email "yuloop@users.noreply.github.com"
           git config merge.ours.driver true
           printf '.github/workflows/build-binaries.yml merge=ours\n' >> .git/info/attributes
           printf 'packages/ai/src/providers/cloudflare-ai-gateway.ts merge=ours\n' >> .git/info/attributes

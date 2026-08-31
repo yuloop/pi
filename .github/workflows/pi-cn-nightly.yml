@@ -105,6 +105,8 @@ jobs:
           git fetch upstream "${{ needs.resolve.outputs.upstream_ref }}"
           git config user.name "yuloop"
           git config user.email "yuloop@users.noreply.github.com"
+          git config user.name "yuloop"
+          git config user.email "yuloop@users.noreply.github.com"
           git config merge.ours.driver true
           printf '.github/workflows/build-binaries.yml merge=ours\n' >> .git/info/attributes
           printf 'packages/ai/src/providers/cloudflare-ai-gateway.ts merge=ours\n' >> .git/info/attributes
@@ -148,6 +150,8 @@ jobs:
           set -euo pipefail
           git remote add upstream "https://github.com/${UPSTREAM_REPO}.git"
           git fetch upstream "${{ needs.resolve.outputs.upstream_ref }}"
+          git config user.name "yuloop"
+          git config user.email "yuloop@users.noreply.github.com"
           git config user.name "yuloop"
           git config user.email "yuloop@users.noreply.github.com"
           git config merge.ours.driver true
@@ -209,6 +213,8 @@ jobs:
           set -euo pipefail
           git remote add upstream "https://github.com/${UPSTREAM_REPO}.git"
           git fetch upstream "${{ needs.resolve.outputs.upstream_ref }}"
+          git config user.name "yuloop"
+          git config user.email "yuloop@users.noreply.github.com"
           git config user.name "yuloop"
           git config user.email "yuloop@users.noreply.github.com"
           git config merge.ours.driver true
