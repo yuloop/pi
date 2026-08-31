@@ -32,6 +32,7 @@ jobs:
           # 所以 merge 后 restore 本仓库的 workflow 目录，防止 push 被拒
           git config merge.ours.driver true
           printf '.github/workflows/build-binaries.yml merge=ours\n' >> .git/info/attributes
+          printf 'packages/ai/src/providers/cloudflare-ai-gateway.ts merge=ours\n' >> .git/info/attributes
           git merge --no-commit --no-edit FETCH_HEAD
           git restore --source=HEAD --staged --worktree .github/workflows
           git commit --no-edit || echo "无变更，跳过提交"
