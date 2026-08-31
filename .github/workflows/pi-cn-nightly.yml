@@ -168,7 +168,16 @@ jobs:
           git config merge.ours.driver true
           printf '.github/workflows/build-binaries.yml merge=ours\n' >> .git/info/attributes
           printf 'packages/ai/src/providers/cloudflare-ai-gateway.ts merge=ours\n' >> .git/info/attributes
-          git merge --allow-unrelated-histories --no-edit FETCH_HEAD
+          git merge --allow-unrelated-histories --no-edit FETCH_HEAD 2>&1 || true
+          if [ -n "$(git diff --name-only --diff-filter=U 2>/dev/null)" ]; then
+            echo "Resolving add/add conflicts: taking upstream for source"
+            git diff --name-only --diff-filter=U | while read -r f; do
+              git checkout --theirs "$f" 2>/dev/null || true
+            done
+            git checkout HEAD -- .github/workflows/ pi-i18n/ packages/ai/src/providers/cloudflare-ai-gateway.ts 2>/dev/null || true
+            git add -A 2>/dev/null || true
+            git commit --no-edit || true
+          fi
       - name: Verify translation gate (100% match required)
         run: |
           set -euo pipefail
@@ -231,7 +240,16 @@ jobs:
           git config merge.ours.driver true
           printf '.github/workflows/build-binaries.yml merge=ours\n' >> .git/info/attributes
           printf 'packages/ai/src/providers/cloudflare-ai-gateway.ts merge=ours\n' >> .git/info/attributes
-          git merge --allow-unrelated-histories --no-edit FETCH_HEAD
+          git merge --allow-unrelated-histories --no-edit FETCH_HEAD 2>&1 || true
+          if [ -n "$(git diff --name-only --diff-filter=U 2>/dev/null)" ]; then
+            echo "Resolving add/add conflicts: taking upstream for source"
+            git diff --name-only --diff-filter=U | while read -r f; do
+              git checkout --theirs "$f" 2>/dev/null || true
+            done
+            git checkout HEAD -- .github/workflows/ pi-i18n/ packages/ai/src/providers/cloudflare-ai-gateway.ts 2>/dev/null || true
+            git add -A 2>/dev/null || true
+            git commit --no-edit || true
+          fi
           python3 pi-i18n/apply_translations.py apply \
             --translations pi-i18n/translations --source . --strict --min-match-rate 1
       - name: Package source archive
