@@ -42,7 +42,7 @@
     "Mermaid diagrams": "Mermaid 图表",
     "Render Mermaid code blocks as Unicode diagrams": "将 Mermaid 代码块渲染为 Unicode 图表",
     "Cache miss notices": "缓存未命中提示",
-    "Show transcript notices for significant prompt-cache misses": "对显著的提示缓存未命中在记录中显示提示",
+    "Show transcript notices for cache costs and provider recovery diagnostics": "对缓存成本和服务商恢复诊断在记录中显示提示",
     "Collapse changelog": "折叠更新日志",
     "Show condensed changelog after updates": "更新后显示精简版更新日志",
     "Quiet startup": "安静启动",
