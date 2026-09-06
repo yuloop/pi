@@ -11,6 +11,6 @@
     "Maximum reasoning": "最大推理",
     "\"Thinking Level\"": "\"思考级别\"",
     "`${keyDisplayText(\"app.thinking.cycle\")} cycles thinking levels in-session`": "`${keyDisplayText(\"app.thinking.cycle\")} 会话内循环切换思考级别`",
-    "  Enter to select · Ctrl+S to set as default · Esc to cancel": "  回车选择 · Ctrl+S 设为默认 · Esc 取消"
+    "  ${keyDisplayText(\"tui.select.confirm\")} to select · ${keyDisplayText(\"app.thinking.save\")} to set as default · ${keyDisplayText(\"tui.select.cancel\")} to cancel": "  ${keyDisplayText(\"tui.select.confirm\")} 选择 · ${keyDisplayText(\"app.thinking.save\")} 设为默认 · ${keyDisplayText(\"tui.select.cancel\")} 取消"
   }
 }

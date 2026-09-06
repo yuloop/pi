@@ -21,7 +21,7 @@
     "hint(\"app.message.dequeue\", \"to edit all queued messages\")": "hint(\"app.message.dequeue\", \"编辑全部已排队消息\")",
     "hint(\"app.clipboard.pasteImage\", \"to paste image (with text fallback)\")": "hint(\"app.clipboard.pasteImage\", \"粘贴图片（无图时回退为文本）\")",
     "rawKeyHint(\"drop files\", \"to attach\")": "rawKeyHint(\"drop files\", \"附加文件\")",
-    "\"Working...\"": "\"工作中...\"",
+    "\"Working\"": "\"工作中\"",
     "\"Thinking...\"": "\"思考中...\"",
     "`${this.defaultWorkingMessage} (${keyText(\"app.interrupt\")} to interrupt)`": "`${this.defaultWorkingMessage}（按 ${keyText(\"app.interrupt\")} 中断）`",
     "\"A bash command is already running. Press Esc to cancel it first.\"": "\"bash 命令正在运行，请先按 Esc 取消。\"",
