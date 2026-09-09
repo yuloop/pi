@@ -11,19 +11,23 @@ shows the surface each package has to end up with.
 
 ## 1. Types and ids
 
-`Id`, `Entry`, `EntryKind`, `ContextEdit`, `Task`, `TaskRole`, `Conversation`,
-`Address`/`Value`/`List`/`Scope`, `Write`/`CommitBatch`, `Page`/`Cursor` and the query shapes
-(§2, §4.1, §5.1, §7.2–7.3). No code.
+`Id`, `EntryIdentity`, `EntryBase`, the composable `EntryData` / `ModelProjection` /
+`ContextHead` / `ContextEdits` facets, `Entry`, `EntryKind`, `EntryInput`, `ContextEdit`, `Task`,
+`TaskRole`, stored task roles, `Conversation`, `Address`/`Value`/`List`/`Scope`,
+`Write`/`CommitBatch`, `Page`/`Cursor` and the query shapes (§2, §4.1, §5.1, §7.2–7.3). No code.
 
-Test: it compiles; a fixture file with one instance of every record shape.
+Test: it compiles; fixtures cover entries with no data, no model, every individual facet and the
+built-in facet combinations.
 
 ## 2. Memory storage
 
 `Storage` and `MemoryStorage`: `commit` numbering from `lastSeq`, point reads, fork-aware
-`scanEntries` / `scanTasks` / `scanConversations` with cursors, target-capped `newestHead`, value
-versions and list elements read at a position, `ownedFrom`, the set of entry kinds written.
+`scanEntries` / `scanTasks` / `scanConversations` with cursors, target-capped `newestHead` over stored
+numeric boundaries, stored entry data/model/edits, value versions and list elements read at a
+position, `ownedFrom`, the set of entry kind strings written.
 
 Tests: every row of the §7.2 query table against hand-built batches; ids are `lastSeq + 1 + i`; a
+head is found without a kind; entry headers omit arbitrary data but retain model/head/edits; a
 live-task scan decodes no terminal rows; `remove` and `clear` hide by position.
 
 ## 3. The line and `Tx`
@@ -31,8 +35,9 @@ live-task scan decodes no terminal rows; `remove` and `clear` hide by position.
 `commit(plan)` on a serialized line: buffered writes, ids final at call time, rewindable
 conversation value/list writes after an entry throw, a throwing plan discards everything, publish
 after persist, `kick` when a batch touched a task. Session and sticky conversation state, task
-writes and conversation writes may appear anywhere. `value` / `list` / `entry` / `task` / `patch` /
-`settle` build the batch of §7.3.
+writes and conversation writes may appear anywhere. `task` / `patch` / `settle` materialize the role
+from the kind's status map. `value` / `list` / `entry` / `task` / `patch` / `settle` build the batch
+of §7.3.
 
 Tests: concurrent commits serialize; a rejected commit consumes no ids; each builder verb produces
 the expected write; reads inside a plan see committed state only; session and sticky conversation
@@ -41,21 +46,23 @@ append/remove/clear after an entry each reject.
 
 ## 4. Entry kinds and context
 
-`EntryKind`, the registry, the built-in kinds (`user`, `assistant`, `tool_result`, `system`,
-`notice`, `summary`, `handoff`, `reset`) with `project`, `head` and `edit`; context = newest head
-prepended to the fork-aware range from its returned id, older heads excluded, edits folded in
-transcript order; projection to pi-ai messages with tool results ordered by call index; the `system`
-kind's epoch fold (newest baseline plus the deltas after it, older deltas dropped) and its projection
-into the baseline slot / `SystemMessage`s. No `compose`.
+`EntryKind` as `kind` plus `is`, the registry and typed append helpers for the built-in kinds
+(`user`, `assistant`, `tool_result`, `system`, `notice`, `summary`, `handoff`, `reset`). Writers
+materialize optional model messages and stored controls; context = newest stored head prepended to
+the fork-aware range from its numeric boundary, older heads excluded, stored edits folded in
+transcript order, stored model arrays concatenated, then pi-ai tool results ordered by call index.
+The `system` data fold selects the newest baseline plus later deltas and places their stored messages
+in the baseline slot / `SystemMessage`s. There is no read-time entry-kind behavior.
 
-Tests: summary keeps the tail; handoff and reset; repeated compaction subsumes; a returned head id
-below the previous visible head kind's returned id is rejected; edits omit/replace targets and persist
-across turns; the fold on a context that kept an old delta; tool-result order.
+Tests: data-only and model-only entries; summary keeps the tail; handoff/reset normalize `"self"`;
+repeated compaction subsumes; a stored head below the previous visible boundary is rejected; edits
+omit/replace targets and persist across turns; context is identical with its plugin kind unregistered;
+the fold on a context that kept an old delta; tool-result order.
 
 ## 5. Forks and historical reads
 
 `createConversation` with `parent`, the shared prefix in fork-aware `scanEntries`, capped-source
-lookup for values and lists, arbitrary content-entry fork points.
+lookup for values and lists, arbitrary transcript-entry fork points.
 
 Tests: a fork sees the head, edits and values in force at its entry; heads/results the source adds
 later are invisible; deep fork chains; successful incomplete tool exchanges project with missing
@@ -63,15 +70,18 @@ results but inherit no tasks; state committed after the entry (a model change) i
 
 ## 6. Task kinds and the driver
 
-`TaskKind`, the registry, `TaskContext` (`commit`, `scratch`, `sleep`, `signal`, `config`,
-`hooks`), the driver of §6.1 (`owned`, `Wake`, attached scopes, `drive` as a waiter, poison guards,
-abort join and re-read), scopes of §6.2. Test kinds only: a counter, a blocker, a kind that
-returns without changing status, a kind that ignores its signal.
+`TaskKind`, the registry, kind-declared status cycles, `TaskContext` (`commit`, `scratch`, `sleep`,
+`signal`, `config`, `hooks`), the driver of §6.1 (`owned`, `Wake`, attached scopes, `drive` as a
+waiter, unchanged-status and poison guards, abort join and re-read), scopes of §6.2. Test kinds only:
+a counter, a blocker, a cycling schedule, a kind that returns without changing status, a kind that
+ignores its signal. There is no parked role or successor chain for retries.
 
-Tests: roles drive execute / recover; a blocked execute holds nothing up; the spin guard; `after`
-gates a start; `drive` resolves on foreground idle while a background task keeps running and the
-loop keeps serving it; abort marks in both race orders; reopen recovers inflight; a mark written
-by one process is applied by the next.
+Tests: persisted roles select execute / recover without a role-map lookup; a blocked execute holds
+nothing up; a valid status cycle; the exact unchanged-status guard; `after` gates a start;
+conversation and harness drive both start foreground/background work, resolve on foreground idle
+and keep serving background work; a full-quiescence wait remains pending on a recurring schedule;
+abort marks in both race orders; reopen recovers inflight; a mark written by one process is applied
+by the next.
 
 ## 7. Scratch
 
@@ -87,15 +97,18 @@ new attempt clears its list.
 `settings`, `fork` with `abort`, `abort`, `hooks.on` scoped with `subtree`), `abortTask`,
 `conversations` with `parent` / independent filtering. No agent behaviour yet.
 
-Tests: open on empty vs existing storage; an unknown kind rejects without scanning entries;
+Tests: open on empty vs existing storage; an unregistered entry kind is reported without scanning
+entries and its stored model/head/edits still derive context; an unknown live task kind rejects;
 replace by name keeps `h.kinds.<name>` consistent; `settings` round-trips; scoped hooks run after
 harness-wide ones, innermost last.
 
 ## 9. Generation kind
 
-Statuses pending → streaming → done / failed / retry_wait / deferred / aborted on a faux provider;
-config capture (model, thinking, selected tools, profile, budget); `system_instructions` with
-sections merged across handlers and the diff writing `system` entries; `before_request`,
+One stable generation task cycles pending → streaming → retry_wait / deferred → streaming until
+done / failed / aborted on a faux provider; config capture (model, thinking, selected tools, profile,
+budget); `system_instructions` with
+sections merged across handlers and the diff writing `system` data plus its materialized model
+message; `before_request`,
 `after_response`, `on_yield`; retry sleeps in execute; recover from frames; usage recorded per
 attempt.
 
@@ -107,7 +120,8 @@ crash while streaming publishes the partial; retry budget exhausted → failed w
 ## 10. Tools, post_tools, exchanges
 
 The tool kind with the sink (`ToolOutput`, `ToolOutputState`, limits enforced by the sink, `diag`,
-`delegate`, `handoff`, `addTools`, `terminate`), `before_tool` (fail-closed) and `after_tool`,
+`delegate`, `handoff`, `addTools`, `terminate`), tool-result entries with structured data plus their
+materialized model message, `before_tool` (fail-closed) and `after_tool`,
 replay policy on recover; post_tools with `after`, terminate / handoff / steer / next generation;
 `accept` idle vs busy; `prompt` and `answerTo`.
 
@@ -151,8 +165,9 @@ delegating first and waiting with the budget, `notify` and the `notice` entry, t
 schedules.
 
 Tests: budget expiry settles the call with `delegated` and the job continues; the notice appears
-on completion; a schedule loops and `abortTask` ends it; recover → `lost` or rerun by policy; a
-user abort during the wait kills a non-backgrounded job.
+on completion; a schedule cycles one stable task id and `abortTask` ends it; it does not block
+ordinary harness drive after foreground idle; recover → `lost` or rerun by policy; a user abort
+during the wait kills a non-backgrounded job.
 
 ## 15. Previews
 
@@ -177,17 +192,17 @@ fold, failed and aborted attempts included.
 
 ## 17. JSONL storage
 
-Append-only batches, replay on open, torn tail discarded, malformed line fails open, the kinds set
-from replay, values as Chord deltas (full when first or small, ops otherwise), scratch sidecars
-retired after the main-file settle.
+Append-only batches, replay on open, torn tail discarded, malformed line fails open, entry
+`data`/`model`/`head`/`edits` and the kind-string set from replay, values as Chord deltas (full when
+first or small, ops otherwise), scratch sidecars retired after the main-file settle.
 
 Tests: conformance against memory (one mutation stream, identical query results); linear file
 growth under repeated sets of a large value; crash between the settle write and the sidecar unlink.
 
 ## 18. SQLite storage
 
-Tables and indexes of §7.5, scratch rows deleted in the settle transaction, storage version and
-`migrate`.
+Tables and indexes of §7.5, nullable entry JSON columns for data/model/edits and an indexed integer
+head boundary, scratch rows deleted in the settle transaction, storage version and `migrate`.
 
 Tests: conformance three ways; a cold reopen decodes only live rows (count them); a version
 mismatch rejects.
