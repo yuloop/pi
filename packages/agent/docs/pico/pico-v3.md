@@ -279,7 +279,7 @@ One session-wide sequence orders every mutation. A creation's sequence number is
 const entryId = await conv.commit(tx => {
   tx.value(planMode).set(true);                                             // 100
   const id = tx.entry(userKind, { model: [message] });                      // 101
-  tx.task(generationKind, { state: { input: id } });                       // 102
+  tx.task(generationKind, { state: { status: "pending", input: id } });     // 102
   return id;
 }, call);
 // one batch [100–102] persisted and published; entryId === 101 here
@@ -305,12 +305,12 @@ history through X:
 await runtime.commit(tx => {
   tx.value(planMode).set(true);                             // 300
   const result = tx.entry(toolResultKind, { data: resultData, model: [message] }); // 301
-  tx.settle(task, { result });                              // 302
+  tx.settle(task, { status: "done", call: task.state.call, assistant: task.state.assistant, output, result });   // 302
 }, call);
 
 await conv.value(model).set("claude-opus-5", call);               // 303, a later commit
 
-const b = await conv.fork(301, undefined, call);   // has the result and plan mode; does not have the new model
+const b = await conv.fork({ at: 301 }, call);      // has the result and plan mode; does not have the new model
 ```
 
 The builder throws if a rewindable conversation value/list write follows an entry; the plan fails
@@ -337,15 +337,17 @@ new identity:
 
 ```text
 400  append pi.inbox item                         inputId = 400
-401  inputResult[400] = queued or running
+401  inputResult[400] = queued or placed
 402  request["req-42"] = { conversationId, inputId:400 }
 ```
 
-`harness.acceptance(requestId)` returns that receipt. This is an explicit lookup for a caller whose
-accept response may have been lost; `accept` itself does not compare payloads or silently replay an
-old call. A second acceptance with the same key rejects as `RequestAlreadyAccepted` and identifies
-the first receipt. Without a request id, no mapping is written. The mapping is session state, so it
-may follow and reference the newly minted inbox element.
+`harness.acceptance(requestId, call)` returns that receipt, for a caller whose accept response may
+have been lost. A request key names one acceptance for the life of the session: a second `accept`
+or `queueInput` with the same key writes nothing and returns the stored `inputId`, whatever its
+payload or mode. Nothing is compared, so no content or digest is kept for that purpose; a client
+that reuses a key for different input gets the first acceptance back, and `result(inputId, call)`
+says what became of it. Without a request id, no mapping is written. The mapping is session state,
+so it may follow and reference the newly minted inbox element.
 
 ## 4. State
 
@@ -465,7 +467,7 @@ const partial = await runtime.scratch(sc => sc.list(frames).read(), call);
 // settlement: the result becomes an entry; settle retires the scope in the same commit
 await runtime.commit(tx => {
   const id = tx.entry(assistantKind, { model: [assemble(partial)] });
-  tx.settle(task, { result: id });
+  tx.settle(task, { status: "done", call: task.state.call, assistant: task.state.assistant, output, result: id });
 }, call);
 ```
 
@@ -497,19 +499,38 @@ supplies the inputs, progress and outcome that must survive a process.
 ```ts
 type TaskRole = "start" | "inflight" | "terminal";
 
-interface Task<State = JsonValue> {
+interface TaskStateBase { readonly status: string }
+
+interface Task<State extends TaskStateBase = TaskStateBase> {
   readonly id: Id;
   readonly conversationId: Id;
   readonly kind: string;
-  readonly status: string;              // kind-specific
+  readonly status: string;              // = state.status, stored and indexed so storage never decodes state
   readonly role: TaskRole;              // materialized from the kind's roles map on every write
-  readonly state: State;                // JSON
+  readonly state: State;                // a tagged union; the status is its discriminant
   readonly after: readonly Id[];        // dependencies, fixed at creation
   readonly background?: true;           // fixed at creation; absent = foreground (§5.6)
   readonly owns?: readonly Id[];        // conversations this task created (§5.7)
   readonly abort?: true;                // durable cancellation mark (§6.3)
 }
 ```
+
+**State is a tagged union over status.** A kind declares one variant per status, carrying exactly
+the fields that exist in it, so nothing is an optional that a reader has to guess about and a
+dependent narrows instead of probing:
+
+```ts
+type ToolStates =
+  | { status: "planned";  call: ToolCall; assistant: Id }
+  | { status: "running";  call: ToolCall; assistant: Id; args: JsonObject; replay: "safe" | "never";
+                          jobId?: Id; cancelJobOnAbort?: boolean }
+  | { status: "done";     call: ToolCall; assistant: Id; output: ToolOutputState; result: Id }
+  | { status: "aborted";  call: ToolCall; assistant: Id; output: ToolOutputState; result: Id };
+```
+
+`Task.status` duplicates `state.status` because storage indexes it and the driver compares it
+without decoding state; `Tx` writes both from the one variant it was given, so they cannot diverge.
+Fields common to every variant must have the same type in each.
 
 A kind maps its statuses to three roles:
 
@@ -524,21 +545,40 @@ on every write. Storage selects live rows using the role index without inspectin
 running kind code. Loading their full records may decode state; terminal history is not decoded.
 Callers cannot edit the role independently.
 
+**`orphaned` is derived, not declared.** A kind never writes it and never lists it. The harness adds
+one terminal variant to every state union, carrying the fields common to all of the kind's own
+variants:
+
+```ts
+type Common<S> = UnionToIntersection<S>;                              // fields present in every variant
+type Orphaned<S> = Omit<Common<S>, "status"> & { status: "orphaned" };
+type ToolState = ToolStates | Orphaned<ToolStates>;                   // { status: "orphaned"; call; assistant }
+```
+
+It is written in one situation only: at open, for a live foreground task whose kind is not
+registered in this process (§6.4). The stored record keeps whatever fields it had; the type
+promises only the common ones, which is all a dependent may rely on, because the kind never ran its
+cleanup. Background tasks of unregistered kinds are parked instead, and resume through `recover`
+when their kind returns. This is the only case in which the harness settles a task it does not own.
+
 ### 5.2 Kinds
 
 ```ts
-interface TaskKind<State, Hooks extends HookPoints = {}, Config extends ConfigSpec = {}, Preview = never> {
+interface TaskKind<States extends TaskStateBase, Hooks extends HookPoints = {}, Config extends ConfigSpec = {}, Preview = never> {
   readonly kind: string;
-  readonly initialStatus: string;
-  readonly roles: Readonly<Record<string, TaskRole>>;
+  readonly initialStatus: States["status"];
+  readonly roles: Readonly<Record<States["status"], TaskRole>>;   // `orphaned` is added as terminal (§5.1)
   readonly hooks?: HookSpecs<Hooks>;                // the points this kind runs (§8.7)
   readonly config?: Config;                         // the values this kind reads (below)
   preview?: {                                       // what UIs see while the task runs (§9.4)
     init(scratch: ScratchReader): Preview;          //   built once, on attach or reopen, from durable scratch
   };                                                //   afterwards the kind mutates runtime.preview.state in place
-  execute(task: Task<State>, runtime: TaskRuntime, call: Call): Promise<void>;
-  recover(task: Task<State>, runtime: TaskRuntime, call: Call): Promise<void>;
-  abort(task: Task<State>, runtime: TaskRuntime, call: Call): Promise<void>;
+  execute(task: Task<States>, runtime: TaskRuntime, call: Call): Promise<void>;
+  recover(task: Task<States>, runtime: TaskRuntime, call: Call): Promise<void>;
+  abort(task: Task<States>, runtime: TaskRuntime, call: Call): Promise<void>;
+}
+
+type TaskState<K> = K extends TaskKind<infer S, any, any, any> ? S | Orphaned<S> : never;  // what readers see
 }
 ```
 
@@ -595,8 +635,9 @@ interface TaskRuntime {
 ```
 
 The registry maps kind names to kinds; a replacement must understand the persisted statuses and
-state of its live tasks. Open reads the live tasks anyway (`inspect()`), so an unknown live kind
-rejects before anything runs; terminal tasks of a forgotten kind are only a problem when read typed.
+state of its live tasks. Open reads the live tasks anyway (`inspect`), so an unregistered live kind
+is handled there rather than rejecting the session (§5.1, §6.4); terminal tasks of a forgotten kind
+are only a problem when read typed.
 
 Typed access uses the kind as witness. Public/runtime reads are asynchronous and require Call;
 transaction reads use the transaction view without another Call:
@@ -649,6 +690,12 @@ never edited. A task may create a successor whose `after` includes itself in its
 it cannot add new dependencies to itself. A dependency outside an attached subtree may require
 another explicit drive; attaching one scope never implicitly executes a sibling scope.
 
+A foreground task may depend on a background one, and it is live while it waits, so its conversation
+stays busy and `drive` does not resolve until the dependency settles. That is what the overflow
+chain wants (`G' after: [C]`). It is a trap for work that may never settle: a foreground task
+depending on a recurring schedule keeps its conversation busy forever. Depend on work that ends, or
+wait inside the task's own execute instead.
+
 ### 5.5 post_tools joins an exchange
 
 The generation's settlement publishes the exchange atomically:
@@ -657,31 +704,40 @@ The generation's settlement publishes the exchange atomically:
 await runtime.commit(tx => {
   const assistant = tx.entry(assistantKind, { model: [message] });    // calls [A, B]
   const tools = message.calls.map(call =>
-    tx.task(toolKind, { state: { call, assistant } }));
+    tx.task(toolKind, { state: { status: "planned", call, assistant } }));
   tx.task(postToolsKind, {
     after: tools,
-    state: { assistant, tools, inputs: task.state.inputs },
+    state: { status: "waiting", assistant, tools, inputs: task.state.inputs },
   });
-  tx.settle(task, { assistant });
+  tx.settle(task, { status: "done", inputs: task.state.inputs, assistant });
 }, call);
 ```
 
-Each tool executes and settles itself: hooks, execution, result entry, terminal status. It does not
+Each tool executes and settles itself: hooks, execution, result entry, terminal variant. It does not
 look at siblings, queues or context. post_tools starts when both are terminal, reads them with the
-typed getter, and decides what happens next:
+typed getter, narrows on their status, and decides what happens next:
 
 ```ts
 async execute(task, runtime, call) {
   await runtime.commit(async tx => {
     const tools = await tx.getTasks(toolKind, task.state.tools);            // Map<id, Task<ToolState>>
-    const outcomes = [...tools.values()].map(t => t.state.output);        // ToolOutputState
+    const outcomes: ToolOutputState[] = [];
+    for (const t of tools.values()) {
+      switch (t.state.status) {
+        case "done": case "aborted": outcomes.push(t.state.output); break;   // both wrote their result entry
+        case "orphaned":                                                     // kind unregistered at open (§5.1)
+          tx.entry(toolResultKind, unavailableResult(t.state.call)); break;
+        default: throw new Error(`tool ${t.id} still live in post_tools`);
+      }
+    }
     if (outcomes.some(o => o.terminate)) {
       for (const inputId of task.state.inputs) {
-        const result = await tx.value(inputResult(inputId)).get();
-        if (result?.status !== "running") throw new Error(`Invalid active input ${inputId}`);
-        tx.value(inputResult(inputId)).set({ ...result, status: "stopped" });
+        const r = await tx.value(inputResult(inputId)).get();
+        if (r?.status !== "placed") throw new Error(`Invalid active input ${inputId}`);
+        tx.value(inputResult(inputId)).set({ status: "unanswered", requestId: r.requestId, entry: r.entry,
+                                             reason: "terminated" });
       }
-      return tx.settle(task, { stopped: true });                      // no successor
+      return tx.settle(task, { status: "stopped", assistant: task.state.assistant, tools: task.state.tools });   // no successor
     }
     const added = outcomes.flatMap(o => o.addedTools ?? []);
     const selectedTools = added.length ? [...current, ...added] : current;
@@ -691,15 +747,15 @@ async execute(task, runtime, call) {
       data: { text: handoff.handoff }, model: [handoffMessage(handoff.handoff)], head: "self",
     });
     const inputs = await landPostToolsInbox(tx, task.conversationId, task.state.inputs); // writes + steer (§8.1)
-    tx.task(generationKind, { state: nextGeneration(task, { selectedTools, inputs }) });
-    tx.settle(task, {});
+    tx.task(generationKind, { state: { status: "pending", ...nextGeneration(task, { selectedTools, inputs }) } });
+    tx.settle(task, { status: "done", assistant: task.state.assistant, tools: task.state.tools, inputs });
   }, call);
 }
 ```
 
 `inputResult(id)` above is the sticky conversation value address for that input (§8.1), not a
-driver operation. The abort handler updates the same owned inputs to `cancelled` and settles in one
-commit. The runtime rejects a marked execute commit before its closure runs; no branch is needed
+driver operation. The abort handler resolves the same owned inputs as `unanswered` with reason
+`aborted` and settles in one commit. The runtime rejects a marked execute commit before its closure runs; no branch is needed
 in the normal settlement. Inbox-placement helpers above implement exactly the mode table in §8.1.
 
 Sequential tools are the same mechanism with `B after: [A]`.
@@ -856,7 +912,7 @@ in an ownership tree may require another explicit attachment; never silently wid
 abortTask(id, call)  mark one live task; reject terminal
 conversation.abort(call)
   one commit: mark its current foreground ownership closure;
-  cancel queued steer/followUp in affected conversations; keep write/nextRun
+  withdraw queued steer/followUp in affected conversations; keep write/nextRun
 ```
 
 `abort: true` is a durable request, not terminal status. When that mark commits, the current
@@ -873,7 +929,7 @@ delivery and then be cancelled; cancellation neither rolls it back nor promises 
     stream returns/throws; execute finishes local finally cleanup and returns
     A's completion enters line; remove A, reserve fresh abort invocation B
     line releases; kind.abort(task, runtime, callB) runs
-120 partial/error outcome and cancelled input results, if the kind needs them
+120 partial/error outcome and unanswered(aborted) input results, if the kind needs them
 121 task terminal aborted; scratch retired in the same commit
     abort method returns; remove B
 ```
@@ -901,7 +957,7 @@ Fresh cleanup can use only durable records. A tool that creates a cancellable ba
 the job id and its cancellation policy on its own task in that same commit. Its abort handler uses
 those references, never locals from execute or a post-mark catch that tries another mutation. Child
 conversation ownership is already durable. Built-in cleanup marks only the child's live foreground
-tasks; it does not call the public conversation abort operation that also cancels queued inputs.
+tasks; it does not call the public conversation abort operation that also withdraws queued inputs.
 This task-only cleanup policy applies on every abort invocation, including after crash/reopen, so
 shutdown cannot accidentally discard preserved queues during recovery. Cleanup's cancellation request treats an already-terminal
 target as finished, using an atomic mark-if-live operation internally or handling that specific public
@@ -916,8 +972,11 @@ forever. An isolate kill boundary is future work; RPC cancellation alone is not 
 
 ### 6.4 Open, close, shutdown, delete
 
-**Open** reports unregistered entry kinds, validates live task kinds, seeds live/ownership indexes,
-exposes inspection/queries, and starts nothing. Unknown entries preserve context through stored facets.
+**Open** reports unregistered entry kinds, seeds live/ownership indexes, exposes inspection/queries,
+and starts nothing. A live task whose kind is not registered cannot run: a background one is parked
+(not started, not recovered, not counted for idleness) and resumes through `recover` when its kind
+returns; a foreground one would keep its conversation busy forever, so open settles it in the
+derived `orphaned` variant (§5.1) and reports it. `inspect` returns those separately. Unknown entries preserve context through stored facets.
 
 **Close** runs one nonpersistent line operation that enters `closing` and stops admission and claims.
 All earlier line operations have already finished. Later storage operations reject; internal invocation
@@ -1205,40 +1264,39 @@ outside the line, and their decisions are re-validated inside it.
 
 ### 8.1 Accepting input
 
-The inbox is a conversation-scoped sticky list, `pi.inbox`. Its list element id is the stable
+Queued input is a conversation-scoped sticky list, `pi.inbox`. Its list element id is the stable
 `inputId`; its value carries the complete entry draft, so a UI can render queued text or images
 without another read:
 
 ```ts
-interface AcceptedEntryDraft extends EntryDraft { readonly kind: string }
-type InputMode = "write" | "steer" | "followUp" | "nextRun";
+type UserInput = string | readonly (TextContent | ImageContent)[];
 
-interface InboxItem {
-  readonly mode: InputMode;
-  readonly entry: AcceptedEntryDraft;
-  readonly requestId?: string;
-}
+type QueuedInput =
+  | { readonly mode: "steer" | "followUp" | "nextRun"; readonly input: UserInput; readonly requestId?: string }
+  | { readonly mode: "write"; readonly kind: EntryKind<E>; readonly entry: EntryInput<E>; readonly requestId?: string };
 
 type InputResult =
-  | { readonly status: "queued"; readonly requestId?: string }
-  | { readonly status: "running"; readonly requestId?: string; readonly placementEntryId: Id }
-  | { readonly status: "placed"; readonly requestId?: string; readonly placementEntryId: Id }
-  | { readonly status: "done"; readonly requestId?: string; readonly placementEntryId: Id; readonly resultEntryId: Id }
-  | { readonly status: "failed" | "cancelled" | "stopped"; readonly requestId?: string;
-      readonly placementEntryId?: Id; readonly reason?: string };
+  | { readonly status: "queued";     readonly requestId?: string }
+  | { readonly status: "placed";     readonly requestId?: string; readonly entry: Id }
+  | { readonly status: "done";       readonly requestId?: string; readonly entry: Id; readonly answer?: Id }
+  | { readonly status: "unanswered"; readonly requestId?: string; readonly entry?: Id;
+      readonly reason: "terminated" | "aborted" | "failed"; readonly detail?: string };
 ```
 
-`inputResult(id)` denotes the sticky conversation Value address with namespace `pi.inputResult`
-and key `String(id)`, typed as `InputResult`. It is ordinary stored state, not a driver callback.
+The three modes that ask for a turn carry user content; a `write` carries its own entry kind and
+the same `EntryInput<E>` (§9.2) `Tx.entry` takes, and asks for nothing. `inputResult(id)` denotes the sticky conversation Value address with
+namespace `pi.inputResult` and key `String(id)`, typed as `InputResult`. It is ordinary stored
+state, not a driver callback.
 
-Acceptance always appends an inbox element and writes `inputResult[inputId]` in the same commit.
-When the conversation is idle, that commit immediately places and removes the item and creates a
-generation; append plus remove folds to no inbox watch operation. When it is busy, the item remains
-queued. `accept` uses `followUp` when it must queue. The four modes are:
+`accept({ input, requestId?, whenBusy? }, call)` is "the user hit enter": when the conversation is
+idle it places the entry and creates a generation in one commit; when it is busy it queues,
+`followUp` by default, `steer` or `reject` if the caller says so. Either way it returns an
+`inputId`, and `result(inputId, call)` says which happened. `queueInput(input, call)` is the
+explicit form for a specific mode, and `abortInput(inputId, call)` withdraws a queued one.
 
-| Mode | Placement | Input-group effect |
+| Mode | Placement | Effect on the answer group |
 |---|---|---|
-| write | next post_tools or final boundary | none; terminal result is `placed` |
+| write | next post_tools or final boundary | none; its result is `done` with no `answer` |
 | steer | next post_tools or final boundary | joins the active group at post_tools; starts the next group after a final answer |
 | followUp | final-answer boundary | starts the next group |
 | nextRun | next explicit idle `accept` | joins the group started by that acceptance |
@@ -1251,19 +1309,21 @@ input to that answer, places writes, then places selected steer/followUp items i
 creates its generation. An `on_yield` continuation retains the current group. No tail scan
 attributes results.
 
-Placement appends `item.entry`, removes the list element and writes its result in one commit.
-`cancelQueued(inputId)` removes an item and records `cancelled`; foreground abort does that for
-queued steer/followUp while preserving write/nextRun. A generation failure records `failed` for its
-whole group; terminate records `stopped`; generation or `post_tools` abort records `cancelled` and
-creates no normal successor. Failure/terminate may place safe writes but do not consume queued
-inputs that require a successor. Exactly one live generation or `post_tools` owns an active group,
-and ownership transfers in the same commit that settles the previous owner.
+Placement appends the entry, removes the list element and writes `placed` in one commit; a `write`
+is placed and `done` in that same commit, so `placed` is never observable for it. Only the
+generation and `post_tools` transition a group: a final answer records `done` with the answer's
+entry id; the harness giving up records `unanswered` with reason `failed`; a tool's `terminate`
+records `terminated`; an abort of the run, or `abortInput` on a queued item, records `aborted`.
+Foreground abort withdraws queued steer and followUp while preserving write and nextRun. Failure
+and terminate may place safe writes but do not consume queued inputs that require a successor.
+Exactly one live generation or `post_tools` owns an active group, and ownership transfers in the
+same commit that settles the previous owner.
 
 The list is stored as append/remove/clear operations, not as a rewritten array. Inbox watch events
 carry the same operations; an idle same-commit append/remove emits none. Memory and SQLite may
 discard a removed sticky element; JSONL retains its append record, so any payload later copied into
 a transcript entry appears twice on disk, including an idle acceptance. Once an unplaced item is
-cancelled, its draft is no longer queryable; `inputResult` retains only its terminal status and
+withdrawn, its draft is no longer queryable; `inputResult` retains only its terminal status and
 optional request id.
 
 ### 8.2 Generation
@@ -1293,7 +1353,7 @@ outcome:
   deferred     { status deferred, handle }         → execute again: poll with sleeps until final
   retryable    { status retry_wait, attempt+1, notBefore } → execute again: sleep, then stream
   overflow     { settle failed(overflow); create collapse C; C's settlement creates G' }
-  failure      { retain partial/error outcome for display if useful; resolve inputs failed;
+  failure      { retain partial/error outcome for display if useful; resolve inputs unanswered(failed);
                  settle failed; no tools/results }
   aborted      provider returns in-band: attempt domain failure/retry commit;
                  durable mark present → TaskCancelled; execute unwinds; driver calls abort below
@@ -1323,7 +1383,7 @@ recover streaming:  frames in scratch → retain/publish the partial for display
 recover deferred:   execute again; the handle is in state
 abort:              fresh invocation after execute/recover returned:
                     read committed scratch; optionally retain partial for display, excluded from requests;
-                    in one commit mark owned input results cancelled, record known usage, settle aborted;
+                    in one commit resolve owned inputs unanswered(aborted), record known usage, settle aborted;
                     no tool tasks/results; settlement retires scratch
 ```
 
@@ -1338,7 +1398,8 @@ way through the sink's `usage`. Persistence and invariant failures are not provi
 
 ```text
 tool execute:
-  check the call was offered by its generation; validate arguments
+  resolve the tool in the registry (the loadout may have changed since the turn started);
+  validate the model's arguments against its schema
   before_tool → allow(args) | block(reason, terminate?)     (a human approval waits inside the hook)
   block / invalid / unknown tool → own error result, no invocation
   { status running; effective args; replay policy }
@@ -1359,7 +1420,8 @@ abort:    previous invocation already returned; read durable scratch and cleanup
 
 post_tools is the code in §5.5: read the tool tasks, stop on terminate, write the handoff if one
 was requested, place writes and steering, carry the extended input group into the next generation,
-and settle. Its abort resolves its input group as cancelled and settles with no successor.
+and settle. Its abort resolves its input group as `unanswered` with reason `aborted` and settles
+with no successor.
 
 **Blocking budget.** A tool call may not block a turn indefinitely. Tools that run processes or
 child conversations create a job (or a conversation) first and wait on it with the budget; if the
@@ -1369,8 +1431,8 @@ work continues as the job:
 ```ts
 const job = await runtime.commit(tx => {
   const id = tx.task(jobKind, { background: true,
-    state: { cmd, cwd, origin: { tool: "bash", task: runtime.taskId, callId: toolCallId } } });
-  tx.patch(runtime.taskId, { state: { jobId: id, cancelJobOnAbort: true } });
+    state: { status: "planned", cmd, cwd, origin: { tool: "bash", task: runtime.taskId, callId: toolCallId } } });
+  tx.patch(task, { jobId: id, cancelJobOnAbort: true });        // partial: still "running" (§9.2)
   return id;
 }, call);
 const done = await runtime.waitForTask(job, { budgetMs: runtime.budgetMs }, call);
@@ -1449,7 +1511,7 @@ run:     { create child conversation (this task owns it); initial values; accept
          abort: mark child's foreground tasks only, preserve its queues; write own error result and settle
 
 spawn:   the same creation commit; settle at once with the child's id
-send:    child.accept(text, undefined, call) → queued if the child is busy
+send:    child.accept({ input: text }, call) → queued if the child is busy
 status:  the child's tail and live tasks
 wait:    await child.drive(call); child.result(lastInputId, call); settle    (recover: drive again)
 stop:    child.abort(call)
@@ -1479,10 +1541,12 @@ Starting one is creating the task; a tool does it in its execute (§8.3), a UI i
 
 ```ts
 const jobId = await conv.commit(tx =>
-  tx.task(jobKind, { background: true, state: { cmd: "npm test", cwd, every: 6 * 3600_000 } }), call);
+  tx.task(jobKind, { background: true, state: { status: "planned", cmd: "npm test", cwd, every: 6 * 3600_000 } }), call);
 ```
 
 ```text
+states:  planned { cmd, cwd, every?, notBefore? } | running { …, startedAt } |
+         exited { …, output, exitCode } | killed { …, output } | lost { … }
 roles:   planned=start; running=inflight; exited/killed/lost=terminal
 execute: sleep until notBefore with Call; { status running; startedAt = runtime.now() }
          env.exec(command, options, call), with bounded capture and spill
@@ -1589,19 +1653,18 @@ listeners are not hooks: they observe, never decide, and never await a commit on
 interface ConversationHandle {
   readonly id: Id;
   snapshot(call: Call): Promise<Conversation>;
-  accept(input, options: { requestId?: string } | undefined, call: Call): Promise<{ inputId: Id }>;
-  prompt(input, options: { requestId?: string } | undefined, call: Call): Promise<AssistantEntry | undefined>;
+  accept(options: { input: UserInput; requestId?: string;
+                    whenBusy?: "followUp" | "steer" | "reject" }, call: Call): Promise<{ inputId: Id }>;
+  prompt(options: { input: UserInput; requestId?: string;
+                    whenBusy?: "followUp" | "steer" | "reject" }, call: Call): Promise<AssistantEntry | undefined>;
   result(inputId: Id, call: Call): Promise<InputResult | undefined>;
   drive(call: Call): Promise<"idle" | "closed">;
-  steer(input, call: Call): Promise<{ inputId: Id }>;
-  followUp(input, call: Call): Promise<{ inputId: Id }>;
-  nextRun(input, call: Call): Promise<{ inputId: Id }>;
-  write<E extends Entry>(kind: EntryKind<E>, input: EntryInput<E>, call: Call): Promise<{ inputId: Id }>;
-  cancelQueued(inputId: Id, call: Call): Promise<"cancelled" | "not_found">;
+  queueInput(input: QueuedInput, call: Call): Promise<{ inputId: Id }>;      // §8.1
+  abortInput(inputId: Id, call: Call): Promise<"aborted" | "not_found">;
   abort(call: Call): Promise<void>;
-  collapse(options: { instructions? } | undefined, call: Call): Promise<Id>;
-  reset(handoff: string | undefined, call: Call): Promise<void>;
-  fork(at: Id | "start", options: { abort?: boolean; values? } | undefined, call: Call): Promise<ConversationHandle>;
+  collapse(options: { instructions?: string } | undefined, call: Call): Promise<Id>;
+  reset(options: { handoff?: string } | undefined, call: Call): Promise<void>;
+  fork(options: { at: Id | "start"; abort?: boolean; values? }, call: Call): Promise<ConversationHandle>;
   spawn(options, call: Call): Promise<Id>;
   value(addr) / list(addr) // async reads/writes take a final Call
   config<C>(kind: TaskKind<unknown, HookPoints, C>): { get(call: Call): Promise<ConfigValues<C>>; set(partial: Partial<ConfigValues<C>>, call: Call): Promise<void> };
@@ -1615,7 +1678,7 @@ interface Harness {
   conversation(id: Id, call: Call): Promise<ConversationHandle | undefined>;
   conversations(query, call: Call): Promise<Page<Conversation>>;
   acceptance(requestId: string, call: Call): Promise<{ requestId: string; conversationId: Id; inputId: Id } | undefined>;
-  inspect(call: Call): Promise<{ start: Task[]; inflight: Task[] }>;
+  inspect(call: Call): Promise<{ start: Task[]; inflight: Task[]; orphaned: Task[]; parked: Task[] }>;
   drive(call: Call): Promise<"idle" | "closed">;
   getEntry(id, call); getEntry(kind, id, call); getEntries(ids, call); getEntries(kind, ids, call);
   entries(conversationId, page, call);
@@ -1632,12 +1695,13 @@ interface Harness {
 ```
 
 `Call` is defined in §6.5. `call.abortSignal` cancels the drive caller's wait, not the work.
-`fork(at, { abort: true }, call)` marks the source's foreground set in the same commit that creates the fork, for "go back to that point"; which
+`fork({ at, abort: true }, call)` marks the source's foreground set in the same commit that creates the fork, for "go back to that point"; which
 conversation a UI treats as current is the UI's business. `prompt` returns the answer entry only
-when its explicit input result is `done`; failed, cancelled, stopped or merely placed input returns
-`undefined`. `result(inputId)` is one sticky-value point read, never a transcript scan. After an
-uncertain remote response, `acceptance(requestId)` recovers the conversation/input identity; the
-caller then reads its result or retries a create and handles `RequestAlreadyAccepted`.
+when its input's result is `done` with an `answer`; `unanswered`, or input still `placed` when the
+drive returned, gives `undefined`. `result(inputId, call)` is one sticky-value point read, never a
+transcript scan. After an uncertain remote response, `acceptance(requestId, call)` recovers the
+conversation and input identity, or the caller simply retries with the same request key and gets
+the same `inputId` back (§3.4).
 
 ### 9.2 Commits
 
@@ -1648,7 +1712,7 @@ const entryId = await harness.commit(tx => {
     data: { text: "plan accepted" },
     model: [{ role: "user", content: "<note>plan accepted</note>", timestamp: 0 }],
   });                                                       // final id, inside the closure
-  tx.task(reminderKind, { background: true, state: { about: id } });
+  tx.task(reminderKind, { background: true, state: { status: "scheduled", about: id } });
   return id;                                                // any value; resolved after commit
 }, call);
 ```
@@ -1674,8 +1738,20 @@ interface Tx {
   // writes; rewindable conversation state before entries (§3.2)
   entry<E extends Entry>(kind: EntryKind<E>, conversationId: Id, input: EntryInput<E>): Id;
   task<S>(kind: TaskKind<S>, spec: { state: S; after?: Id[]; background?: true; owns?: Id[] }): Id;
-  patch<S>(task: Task<S> | Id, changes: { status?: string; state?: Partial<S> }): void;
-  settle<S>(task: Task<S> | Id, outcome: Partial<S> & { status?: string }): void;   // terminal; retires scratch
+  // stay in the current variant: a partial of that variant, no status
+  patch<S extends TaskStateBase, K extends S["status"]>(
+    task: Task<S> & { state: { status: K } },
+    changes: Partial<Omit<Extract<S, { status: K }>, "status">>): void;
+  // move to another variant, or patch by id: the whole variant
+  patch<S extends TaskStateBase>(task: Task<S> | Id, state: NonTerminal<S>): void;
+  settle<S extends TaskStateBase>(task: Task<S> | Id, state: Terminal<S>): void;   // terminal; retires scratch
+  // NonTerminal<S> / Terminal<S> are S filtered by the kind's roles map. The partial overload needs a task
+  // whose variant the compiler can see (the normal case inside a kind's methods); a bare id or an unnarrowed
+  // union falls back to the whole-variant form, so no field of another variant is smuggled in and a partial
+  // cannot change status:
+  //   tx.patch(task, { jobId });                                          // still "running"
+  //   tx.patch(task, { status: "running", call, assistant, args, replay }); // planned → running
+  //   tx.settle(task, { status: "done", call, assistant, output, result }); // terminal
   createConversation(spec): Id;  deleteConversation(id: Id): void;
 }
 ```
@@ -1880,7 +1956,7 @@ interface ConversationView {
   readonly entries: readonly Entry[];      // the last `tail` entries; older ones via entries(id, { before })
   readonly context: readonly Id[];         // the derived context, as ids
   readonly tasks: readonly Task[];         // live tasks, typed by kind (retry attempt, deferred handle, ToolOutputState ... in state)
-  readonly inbox: readonly Element<InboxItem>[];
+  readonly inbox: readonly Element<QueuedInput>[];
   readonly values: ReadonlyMap<Address, JsonValue>;   // every value the registered kinds declare in config, plus any asked for
   readonly previews: ReadonlyMap<Id, JsonValue>;      // per live task: the kind's tracked preview (§5.2)
   readonly faulted: boolean;
@@ -1888,7 +1964,7 @@ interface ConversationView {
 }
 
 type InboxOp =
-  | { readonly type: "append"; readonly item: Element<InboxItem> }
+  | { readonly type: "append"; readonly item: Element<QueuedInput> }
   | { readonly type: "remove"; readonly id: Id }
   | { readonly type: "clear" };
 
@@ -1998,7 +2074,7 @@ const h = await Harness.open(storage, options, call);
 const c = await h.root(call);
 const w = await h.watch(c.id, { tail: 100 }, call);  render(w.view);  w.start(e => render(w.view, e));
 
-const answer = await c.prompt("Inspect the parser", undefined, call);
+const answer = await c.prompt({ input: "Inspect the parser" }, call);
 
 const driving = c.drive(call);  await c.abort(call);  await driving;      // durable intent, then cleanup
 
@@ -2007,8 +2083,8 @@ const child = await c.spawn({ prompt: "Inspect only tests", context: "fresh",
 await h.drive(call);                                                  // drives the child too
 console.log(await h.conversation(child, call));
 
-const alt = await c.fork(answer.id, undefined, call);
-await alt.prompt("Try a different implementation", undefined, call);               // source remains untouched
+const alt = await c.fork({ at: answer.id }, call);
+await alt.prompt({ input: "Try a different implementation" }, call);        // source remains untouched
 
 w.unsubscribe(); await h.close(call);
 ```
@@ -2026,7 +2102,7 @@ h.kinds.generation;  h.kinds.tool;  h.kinds.postTools;  h.kinds.collapse;  h.kin
 
 The built-in entry kinds (`user`, `assistant`, `tool_result`, `system`, `notice`, `summary`,
 `handoff`, `reset`) and task kinds (`generation`, `tool`, `post_tools`, `collapse`, `job`) are
-registered by `open` itself, because `accept`, `prompt`, `steer` and `collapse` need them to write
+registered by `open` itself, because `accept`, `prompt`, `queueInput` and `collapse` need them to write
 and type new records. Reading context does not need entry kinds. A task-kind replacement is
 registered under the built-in's name and must understand its persisted statuses and keep its hook
 names, so existing handlers keep working; a wrapper that delegates to the original is the usual
@@ -2077,7 +2153,7 @@ source cutoffs, sticky state untouched by historical reads.
 | Two overlapping drives | one execution per task |
 | A drive caller cancels its wait | other callers and tasks unaffected |
 | Summary lands after a competing head/reset | rejected as stale; intervening edits do not stale it |
-| Cancel vs land of the same inbox item | one wins on the line; one terminal input result |
+| Withdraw vs land of the same inbox item | one wins on the line; one terminal input result |
 | Abort vs generation/post_tools group transfer | every active input resolves once; no unmarked owner escapes |
 | Several inputs share one generation | every result points to the same final answer entry |
 | Overflow retry while collapse runs | no live task waits on the collapse |
