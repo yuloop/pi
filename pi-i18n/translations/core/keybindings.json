@@ -14,7 +14,7 @@
     "Toggle thinking blocks": "切换思考块显示",
     "Toggle named session filter": "切换命名会话过滤器",
     "Open external editor": "打开外部编辑器",
-    "Copy message to clipboard": "复制消息到剪贴板",
+    "Copy selection or last assistant message": "复制选区或最后一条助手消息",
     "Queue follow-up message": "排队后续消息",
     "Restore queued messages": "恢复已排队消息",
     "Paste image from clipboard (text fallback)": "从剪贴板粘贴图片（无图时回退为文本）",
