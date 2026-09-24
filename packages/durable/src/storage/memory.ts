@@ -320,8 +320,8 @@ export class MemoryStorage implements Storage {
 	}
 
 	async scanConversations(
-		cursor: Cursor | undefined,
 		limit: number,
+		cursor: Cursor | undefined,
 		_context: Context,
 	): Promise<Page<ConversationRecord, Cursor>> {
 		this.assertOpen();
@@ -333,12 +333,23 @@ export class MemoryStorage implements Storage {
 		return page(values, limit);
 	}
 
-	async entry(
+	entry(id: Id, context: Context): Promise<{ readonly entry: EntryRecord; readonly commitSeq: Seq } | undefined>;
+	entry(
+		conversationId: Id,
 		id: Id,
-		_context: Context,
+		context: Context,
+	): Promise<{ readonly entry: EntryRecord; readonly commitSeq: Seq } | undefined>;
+	async entry(
+		idOrConversationId: Id,
+		idOrContext: Id | Context,
+		context?: Context,
 	): Promise<{ readonly entry: EntryRecord; readonly commitSeq: Seq } | undefined> {
 		this.assertOpen();
-		const entry = this.state.entries.get(id);
+		const id = context === undefined ? idOrConversationId : (idOrContext as Id);
+		const entry =
+			context === undefined
+				? this.state.entries.get(id)
+				: this.visibleEntries(idOrConversationId, id, id).next().value;
 		if (entry === undefined) return undefined;
 		return { entry: clone(entry), commitSeq: this.state.entryCommitSeqs.get(id)! };
 	}
@@ -370,8 +381,8 @@ export class MemoryStorage implements Storage {
 
 	async scanEntries(
 		query: EntryQuery,
-		cursor: Cursor | undefined,
 		limit: number,
+		cursor: Cursor | undefined,
 		_context: Context,
 	): Promise<Page<EntryRecord, Cursor>> {
 		this.assertOpen();
@@ -394,8 +405,8 @@ export class MemoryStorage implements Storage {
 
 	async scanTasks(
 		query: TaskQuery,
-		cursor: Cursor | undefined,
 		limit: number,
+		cursor: Cursor | undefined,
 		_context: Context,
 	): Promise<Page<StoredTask, Cursor>> {
 		this.assertOpen();
@@ -474,8 +485,8 @@ export class MemoryStorage implements Storage {
 
 	async scanDocuments(
 		query: DocumentQuery,
-		cursor: Cursor | undefined,
 		limit: number,
+		cursor: Cursor | undefined,
 		_context: Context,
 	): Promise<Page<DocumentRecord, Cursor>> {
 		this.assertOpen();
@@ -581,9 +592,6 @@ export class MemoryStorage implements Storage {
 			if (action.create === undefined && existing === undefined) throw new Error(`Unknown document: ${id}`);
 			if (action.create !== undefined && existing !== undefined) throw new Error(`Document ${id} already exists`);
 			if (existing?.record.retiredAt !== undefined) throw new Error(`Document ${id} is retired`);
-			if (action.create !== undefined && action.content?.kind !== "base") {
-				throw new Error(`Document ${id} creation requires a base`);
-			}
 			const previous = existing?.revisions.at(-1);
 			if (action.content?.kind === "delta") {
 				if (previous === undefined) throw new Error(`Document ${id} delta has no base`);

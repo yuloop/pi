@@ -366,8 +366,8 @@ interface Conversation {
   context(context: Context): Promise<ContextView>;
   entries(
     query: Omit<EntryQuery, "conversationId">,
-    cursor: Cursor | undefined,
     limit: number,
+    cursor: Cursor | undefined,
     context: Context,
   ): Promise<Page<EntryRecord, Cursor>>;
   fork(
@@ -804,8 +804,9 @@ interface Tx {
   conversation(id: Id): Promise<ConversationRecord | undefined>;
   entry(id: Id): Promise<EntryRecord | undefined>;
   task(id: Id): Promise<TaskRecord<JsonValue, JsonValue, JsonValue> | undefined>;
-  scanEntries(query: EntryQuery): Promise<readonly EntryRecord[]>;
-  scanTasks(query: TaskQuery): Promise<readonly TaskRecord<JsonValue, JsonValue, JsonValue>[]>;
+  scanConversations(limit: number, cursor?: Cursor): Promise<Page<ConversationRecord, Cursor>>;
+  scanEntries(query: EntryQuery, limit: number, cursor?: Cursor): Promise<Page<EntryRecord, Cursor>>;
+  scanTasks(query: TaskQuery, limit: number, cursor?: Cursor): Promise<Page<TaskRecord<JsonValue, JsonValue, JsonValue>, Cursor>>;
 
   createConversation(value: Omit<ConversationRecord, "id">): Promise<ConversationRecord>;
   appendEntry(conversationId: Id, value: EntryDraft): Promise<EntryRecord>;
@@ -2039,21 +2040,22 @@ interface Storage {
   mintId(): Promise<Id>;
 
   conversation(id: Id, context: Context): Promise<ConversationRecord | undefined>;
-  scanConversations(cursor: Cursor | undefined, limit: number, context: Context): Promise<Page<ConversationRecord, Cursor>>;
+  scanConversations(limit: number, cursor: Cursor | undefined, context: Context): Promise<Page<ConversationRecord, Cursor>>;
 
   entry(id: Id, context: Context): Promise<{ readonly entry: EntryRecord; readonly commitSeq: Seq } | undefined>;
+  entry(conversationId: Id, id: Id, context: Context): Promise<{ readonly entry: EntryRecord; readonly commitSeq: Seq } | undefined>;
   findLatestHeadMarker(conversationId: Id, atOrBeforeEntryId: Id | undefined, context: Context): Promise<(EntryRecord & { readonly head: Id }) | undefined>;
-  scanEntries(query: EntryQuery, cursor: Cursor | undefined, limit: number, context: Context): Promise<Page<EntryRecord, Cursor>>;
+  scanEntries(query: EntryQuery, limit: number, cursor: Cursor | undefined, context: Context): Promise<Page<EntryRecord, Cursor>>;
 
   task(id: Id, context: Context): Promise<TaskRecord<JsonValue, JsonValue, JsonValue> | undefined>;
-  scanTasks(query: TaskQuery, cursor: Cursor | undefined, limit: number, context: Context): Promise<Page<TaskRecord<JsonValue, JsonValue, JsonValue>, Cursor>>;
+  scanTasks(query: TaskQuery, limit: number, cursor: Cursor | undefined, context: Context): Promise<Page<TaskRecord<JsonValue, JsonValue, JsonValue>, Cursor>>;
 
   submission(id: Id, context: Context): Promise<SubmissionRecord | undefined>;
   submissionByRequest(conversationId: Id, requestId: string, context: Context): Promise<SubmissionRecord | undefined>;
 
   findDocument(address: DocumentAddress, at: DocumentPoint, context: Context): Promise<DocumentRecord | undefined>;
   document(id: Id, at: DocumentPoint, context: Context): Promise<StoredDocument | undefined>;
-  scanDocuments(query: DocumentQuery, cursor: Cursor | undefined, limit: number, context: Context): Promise<Page<DocumentRecord, Cursor>>;
+  scanDocuments(query: DocumentQuery, limit: number, cursor: Cursor | undefined, context: Context): Promise<Page<DocumentRecord, Cursor>>;
 
   close(context: Context): Promise<void>;
 }
@@ -2071,8 +2073,10 @@ inclusive ID range in newest-first order while applying every conversation
 ancestry cap. With no bounds it pages complete visible history. To read context
 through entry `E`, find the marker at or before `E`, then scan from
 `marker?.head` through `E`. For current context the upper bound is omitted.
-`entry()` combines exact global lookup with the commit sequence required by
-historical document reads. `limit` is always the maximum page size.
+`entry(id)` combines exact global lookup with the commit sequence required by
+historical document reads. `entry(conversationId, id)` returns that pair only
+when the entry is visible through the requested conversation's ancestry. `limit`
+is always the maximum page size.
 `findDocument()` resolves one exact logical kind/scope/key address at current or
 historical membership. A missing key means the singleton, not every family
 member. `scanDocuments()` enumerates only the incarnations alive in one exact
