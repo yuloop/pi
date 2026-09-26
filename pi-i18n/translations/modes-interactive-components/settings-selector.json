@@ -14,7 +14,6 @@
     "Anthropic extra usage": "Anthropic 额外用量",
     "Warn when Anthropic subscription auth may use paid extra usage": "当 Anthropic 订阅认证可能产生付费额外用量时发出警告",
     "Use separate themes for light and dark terminal appearance": "为终端浅色与深色外观使用不同主题",
-    "Select a theme, or choose Automatic to follow terminal appearance.": "选择主题，或选择 Automatic 跟随终端外观。",
     "Automatic Theme": "自动主题",
     "Choose themes for terminal light and dark appearance.": "为终端浅色与深色外观分别选择主题。",
     "Light/dark detection requires terminal support.": "浅色/深色检测需要终端支持。",
@@ -83,6 +82,7 @@
     "Autocomplete max items": "自动补全最大条目数",
     "Max visible items in autocomplete dropdown (3-20)": "自动补全下拉列表的最大可见条目数（3-20）",
     "Clear empty rows when content shrinks (may cause flicker)": "内容缩小时清除空行（可能导致闪烁）",
-    "Show OSC 9;4 progress indicators in the terminal tab bar": "在终端标签栏显示 OSC 9;4 进度指示"
+    "Show OSC 9;4 progress indicators in the terminal tab bar": "在终端标签栏显示 OSC 9;4 进度指示",
+    "Select a theme, or choose automatic to follow terminal appearance.": "选择主题，或选择 automatic 跟随终端外观。"
   }
 }

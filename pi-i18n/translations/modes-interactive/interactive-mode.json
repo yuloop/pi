@@ -9,7 +9,6 @@
     "hint(\"app.suspend\", \"to suspend\")": "hint(\"app.suspend\", \"挂起\")",
     "keyHint(\"tui.editor.deleteToLineEnd\", \"to delete to end\")": "keyHint(\"tui.editor.deleteToLineEnd\", \"删除到行尾\")",
     "hint(\"app.thinking.cycle\", \"to cycle thinking level\")": "hint(\"app.thinking.cycle\", \"切换思考级别\")",
-    "rawKeyHint(`${keyText(\"app.model.cycleForward\")}/${keyText(\"app.model.cycleBackward\")}`, \"to cycle models\")": "rawKeyHint(`${keyText(\"app.model.cycleForward\")}/${keyText(\"app.model.cycleBackward\")}`, \"切换模型\")",
     "hint(\"app.model.select\", \"to select model\")": "hint(\"app.model.select\", \"选择模型\")",
     "hint(\"app.tools.expand\", \"to expand tools\")": "hint(\"app.tools.expand\", \"展开工具输出\")",
     "hint(\"app.thinking.toggle\", \"to expand thinking\")": "hint(\"app.thinking.toggle\", \"展开思考过程\")",
@@ -78,7 +77,6 @@
     "`Session compacted ${times}`": "`会话已压缩 ${times} 次`",
     "\"Session cwd not found\"": "\"找不到会话工作目录\"",
     "`Session name: ${currentName}`": "`会话名称：${currentName}`",
-    "`Session name set: ${sessionName ?? name}`": "`会话名称已设置：${sessionName ?? name}`",
     "`Replace current session with ${inputPath}?`": "`用 ${inputPath} 替换当前会话？`",
     "`Failed to import session: ${error.message}`": "`导入会话失败：${error.message}`",
     "`Logged in to ${providerName}, but local model state could not be synchronized: ${errorMsg}`": "`已登录 ${providerName}，但本地模型状态无法同步：${errorMsg}`",
@@ -123,6 +121,8 @@
     "\"Failed to fork session\"": "\"创建派生会话失败\"",
     "\"Failed to resume session\"": "\"恢复会话失败\"",
     "`${providerOption.method?.name ?? \"Authentication\"} is configured outside ${APP_NAME}.`": "`${providerOption.method?.name ?? \"认证\"}已在 ${APP_NAME} 之外配置。`",
-    "`Saved trust decision: ${selection.trusted ? \"trusted\" : \"untrusted\"}. Restart ${APP_NAME} for this to take effect.`": "`已保存信任决定：${selection.trusted ? \"已信任\" : \"未信任\"}。重启 ${APP_NAME} 后生效。`"
+    "`Saved trust decision: ${selection.trusted ? \"trusted\" : \"untrusted\"}. Restart ${APP_NAME} for this to take effect.`": "`已保存信任决定：${selection.trusted ? \"已信任\" : \"未信任\"}。重启 ${APP_NAME} 后生效。`",
+    "rawKeyHint(\n\t\t\t\t\t\t`${keyText(\"app.model.cycleForward\")}/${keyText(\"app.model.cycleBackward\")}`,\n\t\t\t\t\t\t\"to cycle models\",\n\t\t\t\t\t)": "rawKeyHint(\n\t\t\t\t\t\t`${keyText(\"app.model.cycleForward\")}/${keyText(\"app.model.cycleBackward\")}`,\n\t\t\t\t\t\t\"切换模型\",\n\t\t\t\t\t)",
+    "`Session name set: ${displayName}`": "`会话名称已设置：${displayName}`"
   }
 }

@@ -2,6 +2,6 @@
   "file": "packages/coding-agent/src/modes/interactive/theme/theme-controller.ts",
   "description": "pi 汉化词表：packages/coding-agent/src/modes/interactive/theme/theme-controller.ts",
   "replacements": {
-    "Failed to load theme \"${themeName}\": ${result.error}\\nFell back to dark theme.": "加载主题 \"${themeName}\" 失败：${result.error}\\n已回退到深色主题。"
+    "Failed to load theme \"${themeName}\": ${result.error}\\nFell back to the system theme.": "加载主题 \"${themeName}\" 失败：${result.error}\\n已回退到系统主题。"
   }
 }
