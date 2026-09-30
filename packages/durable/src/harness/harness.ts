@@ -21,7 +21,13 @@ import type {
 	WatchHandle,
 } from "../types.ts";
 import { ROOT_CONVERSATION_ID } from "../types.ts";
-import { ConversationConfig, type ConversationConfigState, DEFAULT_RETRY_POLICY } from "./config.ts";
+import { createCompaction } from "./compaction.ts";
+import {
+	ConversationConfig,
+	type ConversationConfigState,
+	DEFAULT_COMPACTION_POLICY,
+	DEFAULT_RETRY_POLICY,
+} from "./config.ts";
 import { readContext } from "./context.ts";
 import { withdrawQueuedInputs } from "./inbox.ts";
 import { settleSchedulerOutcome } from "./live.ts";
@@ -29,8 +35,11 @@ import { BUILTIN_SETUP_KEY, BUILTIN_TASKS } from "./registry.ts";
 import { type InvocationBinding, TaskScheduler } from "./scheduler.ts";
 import { Submissions } from "./submissions.ts";
 import type {
+	CompactionPolicy,
+	CompactionResult,
 	ContextView,
 	Conversation,
+	ConversationAbortOptions,
 	ConversationCreateOptions,
 	ConversationHandle,
 	ConversationInit,
@@ -173,8 +182,25 @@ class ConversationImpl<Tool extends ToolRegistration> implements Conversation {
 		}, context);
 	}
 
+	async getCompaction(context: Context): Promise<CompactionPolicy> {
+		return (await this.#config(context)).compaction ?? { ...DEFAULT_COMPACTION_POLICY };
+	}
+
+	setCompaction(policy: CompactionPolicy | undefined, context: Context): Promise<void> {
+		return this.#editConfig((config) => {
+			if (policy === undefined) delete config.compaction;
+			else config.compaction = policy;
+		}, context);
+	}
+
 	submit(submission: SubmissionDraft, context: Context): Promise<Submission> {
 		return this.#host.submissions.submit(this.id, submission, context);
+	}
+
+	compact(instructions: string | undefined, context: Context): Promise<TaskId<CompactionResult>> {
+		this.#host.tasks.resume();
+		const input = { reason: "manual", ...(instructions === undefined ? {} : { instructions }) } as const;
+		return this.#host.harness.commitWith((tx) => createCompaction(tx, this.id, input), context);
 	}
 
 	async reset(handoff: string | undefined, context: Context): Promise<void> {
@@ -216,9 +242,9 @@ class ConversationImpl<Tool extends ToolRegistration> implements Conversation {
 		);
 	}
 
-	abort(context: Context): Promise<void> {
+	abort(context: Context, options?: ConversationAbortOptions): Promise<void> {
 		this.#host.tasks.resume();
-		return this.#host.tasks.abortConversation(this.id, context);
+		return this.#host.tasks.abortConversation(this.id, options?.background === true, context);
 	}
 
 	waitForIdle(context: Context): Promise<void> {
@@ -311,7 +337,7 @@ class HarnessImpl<Tool extends ToolRegistration> extends SessionImpl implements 
 	inspect(context: Context): Promise<HarnessInspection> {
 		return this.readOnLine(async () => {
 			const snapshot = this.#registry.snapshot();
-			const { scheduling, tasks } = this.#tasks.inspect(snapshot);
+			const { scheduling, tasks } = await this.#tasks.inspect(snapshot);
 			const scan = (status: "queued" | "placed") =>
 				scanAll((cursor) => this.#storage.scanSubmissions({ status }, SCAN_PAGE_SIZE, cursor, context));
 			const submissions = [...(await scan("queued")), ...(await scan("placed"))].sort((a, b) => a.id - b.id);
@@ -458,7 +484,10 @@ function boundConversation(
 				abort: bound((callContext) => submission.abort(callContext)),
 			};
 		},
-		abort: bound((callContext) => tasks.abortConversation(id, callContext)),
+		abort: async (context, options) => {
+			binding.check();
+			return tasks.abortConversation(id, options?.background === true, bind(context));
+		},
 		waitForIdle: bound((callContext) => tasks.waitForIdle(id, callContext)),
 	};
 }

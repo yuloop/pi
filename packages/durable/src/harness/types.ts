@@ -97,6 +97,16 @@ export type AnyTask = {
 	};
 };
 
+/** Options of `Conversation.abort()`. */
+export type ConversationAbortOptions = {
+	/**
+	 * Cross background boundaries: mark every live task reached ignoring the background flag when the abort is admitted,
+	 * withdraw the queued inputs of every conversation reached, and wait until those tasks are terminal and the
+	 * conversation is ordinarily idle. Background work created afterwards is neither marked nor awaited.
+	 */
+	readonly background?: boolean;
+};
+
 /** Hook handler map declared by a task definition. */
 export type HooksOf<K> = K extends Task<infer _I, infer _S, infer _R, infer H> ? H : never;
 
@@ -108,7 +118,7 @@ export interface ConversationHandle {
 	readonly id: ConversationId;
 	submit(submission: InputSubmissionDraft, context: Context): Promise<Submission>;
 	/** `Conversation.abort()`: withdraw queued inputs, abort the ordinary ownership scope, and wait until it is idle. */
-	abort(context: Context): Promise<void>;
+	abort(context: Context, options?: ConversationAbortOptions): Promise<void>;
 	/** Resolve when the conversation's ordinary ownership scope has no live non-background task. */
 	waitForIdle(context: Context): Promise<void>;
 }
@@ -354,6 +364,27 @@ export type ConversationRetryPolicy = {
 	maxAgentDelayMs?: number;
 };
 
+/** Automatic compaction thresholds (spec §8.7); manual compaction ignores `enabled`. */
+export type CompactionPolicy = {
+	/** Threshold and overflow compaction. */
+	enabled: boolean;
+	/** Room kept free for the answer: generation blocks to compact above `contextWindow - reserveTokens`. */
+	reserveTokens: number;
+	/** Approximate size of the recent context a summary keeps verbatim. */
+	keepRecentTokens: number;
+	/** Background compaction starts `backgroundTokens` below the blocking threshold; `0` disables it. */
+	backgroundTokens: number;
+};
+
+/** Why a compaction runs: `compact()`, a threshold in generation preparation, or a context overflow. */
+export type CompactionReason = "manual" | "threshold" | "overflow";
+
+/**
+ * `entryId` of a blocking compaction's summary, or the `submissionId` of a conversation-owned compaction's summary
+ * write; both absent when nothing was compacted.
+ */
+export type CompactionResult = { entryId?: EntryId; submissionId?: SubmissionId };
+
 export type HarnessOptions<Tool extends ToolRegistration = ToolRegistration> = {
 	/** pi-ai model access used by generation. */
 	readonly models: Models;
@@ -372,8 +403,13 @@ export type TaskInspection = {
 		| { readonly kind: "running" }
 		/** The next scheduling pass reserves it; `migrates` when its definition is newer and has `migrate`. */
 		| { readonly kind: "ready"; readonly migrates: boolean }
-		/** Pending until these tasks are terminal. */
+		/**
+		 * Waits for these live tasks: the live part of its `on`, or, when abort-marked, its live ordinary owned work, which
+		 * must end before its abort handler starts.
+		 */
 		| { readonly kind: "waiting"; readonly on: readonly TaskId[] }
+		/** Outcome held until its ordinary owned work drains. */
+		| { readonly kind: "completing" }
 		/** No registered definition can take it; aborting it settles it as `orphaned`. */
 		| {
 				readonly kind: "blocked";
@@ -398,6 +434,8 @@ export type ContextView = {
 	readonly head: EntryRecord | undefined;
 	/** Raw active entries: the head marker followed by non-head entries from its head through the tail. */
 	readonly entries: readonly EntryRecord[];
+	/** Per entry of `entries`, its model messages after edits and excluded stop reasons, before tool result ordering. */
+	readonly contributions: readonly (readonly Message[])[];
 	/** Model context for the next provider request. */
 	readonly messages: readonly Message[];
 };
@@ -431,6 +469,10 @@ export interface Conversation {
 	getFollowUpMode(context: Context): Promise<QueueMode>;
 	/** `undefined` removes the configured mode. */
 	setFollowUpMode(mode: QueueMode | undefined, context: Context): Promise<void>;
+	/** `DEFAULT_COMPACTION_POLICY` when unset. */
+	getCompaction(context: Context): Promise<CompactionPolicy>;
+	/** `undefined` removes the configured policy. */
+	setCompaction(policy: CompactionPolicy | undefined, context: Context): Promise<void>;
 
 	/**
 	 * Durably admit user input or a passive entry write. A busy conversation, or one with queued items, queues it in
@@ -442,6 +484,11 @@ export interface Conversation {
 	 * Resolves after admission; while busy, it is placed at the next boundary.
 	 */
 	reset(handoff: string | undefined, context: Context): Promise<void>;
+	/**
+	 * Admit a manual compaction task and return its ID. It summarizes while the conversation keeps working and places its
+	 * summary through a write submission: at once when idle, otherwise at the next boundary (spec §8.7).
+	 */
+	compact(instructions: string | undefined, context: Context): Promise<TaskId<CompactionResult>>;
 
 	/** Session commit whose `tx.createTask()` defaults to this conversation. */
 	commit<T>(change: (tx: Tx) => T | Promise<T>, context: Context): Promise<T>;
@@ -456,9 +503,9 @@ export interface Conversation {
 	fork(at: EntryId, options: ConversationCreateOptions, context: Context): Promise<Conversation>;
 	/**
 	 * Withdraw queued inputs (queued writes stay), mark every live non-background task of the ordinary ownership scope,
-	 * signal them, and resolve once the scope is idle. Background subtrees survive.
+	 * signal them, and resolve once the scope is idle. Background subtrees survive unless `background` is set.
 	 */
-	abort(context: Context): Promise<void>;
+	abort(context: Context, options?: ConversationAbortOptions): Promise<void>;
 	/**
 	 * Resolve when the ordinary ownership scope has no live non-background task: this conversation and the conversations
 	 * owned, transitively, by its non-background tasks.
@@ -531,6 +578,8 @@ export interface GenerationHooks {
 	afterResponse(message: AssistantMessage, api: HookApi, context: Context): void | Promise<void>;
 	/** A final answer; the first `continue` appends a user message and continues the run. */
 	onYield(answer: AssistantMessage, api: HookApi, context: Context): HookResult<{ readonly continue: UserInput }>;
+	/** After every tool of the round is terminal; `results` are the round's result entries in call order. */
+	afterTools(assistant: EntryId, results: readonly EntryId[], api: HookApi, context: Context): void | Promise<void>;
 }
 
 /** Hooks of the built-in tool task. */
@@ -550,8 +599,22 @@ export interface ToolHooks {
 	): HookResult<ToolExecutionResult>;
 }
 
-/** Hooks of the built-in post-tools task. */
-export interface PostToolsHooks {
-	/** After every tool of the round is terminal; `results` are the round's result entries in call order. */
-	afterTools(assistant: EntryId, results: readonly EntryId[], api: HookApi, context: Context): void | Promise<void>;
+/** Hooks of the built-in compaction task. */
+export interface CompactionHooks {
+	/**
+	 * After range selection, before summarizing; the first decision wins. `entries` are the active entries the summary
+	 * replaces, the head marker first, and `messages` their model context, the summarizer's source; `firstKept` is the
+	 * first entry kept verbatim.
+	 */
+	beforeCompact(
+		compaction: {
+			readonly reason: CompactionReason;
+			readonly entries: readonly EntryRecord[];
+			readonly messages: readonly Message[];
+			readonly firstKept: EntryId;
+			readonly instructions?: string;
+		},
+		api: HookApi,
+		context: Context,
+	): HookResult<{ readonly decline: true } | { readonly summary: string }>;
 }

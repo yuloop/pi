@@ -369,6 +369,18 @@ type ConversationRetryPolicy = {
   maxAgentDelayMs?: number;
 };
 
+/** Automatic compaction thresholds (section 8.7); manual compaction ignores `enabled`. */
+type CompactionPolicy = {
+  /** Threshold and overflow compaction. */
+  enabled: boolean;
+  /** Room kept free for the answer: generation blocks to compact above `contextWindow - reserveTokens`. */
+  reserveTokens: number;
+  /** Approximate size of the recent context a summary keeps verbatim. */
+  keepRecentTokens: number;
+  /** Background compaction starts `backgroundTokens` below the blocking threshold; `0` disables it. */
+  backgroundTokens: number;
+};
+
 type ToolExecutionMode = "parallel" | "sequential";
 
 /** How many queued items of one mode a boundary selects (section 6). */
@@ -386,6 +398,8 @@ type ConversationConfigState = {
   steeringMode?: QueueMode;
   /** Default `one-at-a-time`; see section 6. */
   followUpMode?: QueueMode;
+  /** Default `DEFAULT_COMPACTION_POLICY`; see section 8.7. */
+  compaction?: CompactionPolicy;
 };
 
 /** Built-in rewindable configuration document; see below. */
@@ -408,6 +422,8 @@ function defineEntry<D extends JsonValue = never>(kind: string): Entry<D>;
 type ContextView = {
   readonly head: EntryRecord | undefined;
   readonly entries: readonly EntryRecord[];
+  /** Per entry of `entries`, its model messages after edits and rule 9, before rules 7 and 8. */
+  readonly contributions: readonly (readonly Message[])[];
   readonly messages: readonly Message[];
 };
 
@@ -432,6 +448,8 @@ type TaskInspection = {
     | { readonly kind: "running" }
     | { readonly kind: "ready"; readonly migrates: boolean }
     | { readonly kind: "waiting"; readonly on: readonly TaskId[] }
+    /** Outcome held until its ordinary owned work drains (section 5.5). */
+    | { readonly kind: "completing" }
     | {
         readonly kind: "blocked";
         readonly reason: "missing_task" | "task_too_old" | "migration_failed";
@@ -473,6 +491,8 @@ interface Conversation {
   setSteeringMode(mode: QueueMode | undefined, context: Context): Promise<void>;
   getFollowUpMode(context: Context): Promise<QueueMode>;
   setFollowUpMode(mode: QueueMode | undefined, context: Context): Promise<void>;
+  getCompaction(context: Context): Promise<CompactionPolicy>;
+  setCompaction(policy: CompactionPolicy | undefined, context: Context): Promise<void>;
 
   commit<T>(
     change: (tx: Tx) => T | Promise<T>,
@@ -490,9 +510,10 @@ interface Conversation {
     options: ConversationCreateOptions,
     context: Context,
   ): Promise<Conversation>;
-  compact(instructions: string | undefined, context: Context): Promise<TaskId>;
+  compact(instructions: string | undefined, context: Context): Promise<TaskId<CompactionResult>>;
   reset(handoff: string | undefined, context: Context): Promise<void>;
-  abort(context: Context): Promise<void>;
+  /** `{ background: true }` also aborts background work under the conversation (section 5.4). */
+  abort(context: Context, options?: { readonly background?: boolean }): Promise<void>;
   waitForIdle(context: Context): Promise<void>;
   viewState(context: Context): Promise<AttachedReplicatedState<ConversationView>>;
   watch(context: Context): Promise<ConversationWatch>;
@@ -543,9 +564,10 @@ settlement.
 7.1). `createRegistry()` pre-registers the built-in task definitions (section 8);
 they cannot be disposed or replaced, and open rejects a registry whose snapshot
 lacks any of them or the built-in `pi` conversation setup.
-Open changes surviving `running` tasks to `pending` and does nothing else to
-task records: it never migrates or terminalizes a task because its definition
-is missing or unmigratable. Such a task stays `pending` and is **blocked**: the
+Open changes surviving `running` tasks to `pending`, keeps `waiting` tasks
+waiting, and re-evaluates finalization and `failFast` for `completing` and
+`waiting` tasks (section 5.5). It never migrates or terminalizes a task because
+its definition is missing or unmigratable. Such a task stays `pending` or `waiting` and is **blocked**: the
 scheduler skips it and reconsiders it whenever the registry changes (section
 5.4). Any built-in document touched by recovery migrates through its ordinary
 typed access path. Open does not scan or migrate other documents. No handler
@@ -563,7 +585,7 @@ no configured model produces a durable `no_model` generation failure.
 repeat open-time reconciliation, and it throws after close. Work that must happen
 before any task runs, such as registration or seeding, happens before
 `resume()`. Calls that ask for progress also enable scheduling, so they never
-wait on a paused Harness: `Conversation.submit()`, `Submission.wait()`,
+wait on a paused Harness: `Conversation.submit()`, `Conversation.compact()`, `Submission.wait()`,
 `Harness.waitForTask()`, `Harness.waitForIdle()`, and
 `Conversation.waitForIdle()`. Recovered work starts with them. A viewer that only
 reads never enables scheduling.
@@ -616,7 +638,10 @@ when the field is absent; `setRetryPolicy(undefined)` removes the field.
 `getToolExecution()` returns `parallel` when the field is absent;
 `setToolExecution(undefined)` removes it. `getSteeringMode()` and
 `getFollowUpMode()` return `one-at-a-time` when their field is absent; their
-setters remove the field for `undefined`.
+setters remove the field for `undefined`. `getCompaction()` returns
+`DEFAULT_COMPACTION_POLICY`, `{ enabled: true, reserveTokens: 16384,
+keepRecentTokens: 20000, backgroundTokens: 32768 }`, when the field is absent;
+`setCompaction(undefined)` removes it.
 `streamOptions` are forwarded to every generation request of the conversation;
 `streamOptions.maxRetries` are provider retries inside one request, while `retry`
 governs durable generation attempts (section 8). Each setter performs
@@ -634,10 +659,10 @@ not registered. The create/fork conveniences check only one thing about `init`
 writes: names that `init` newly activates must be registered. Names that were
 already active are never revalidated, so stale unregistered names survive every
 edit. All other raw document writes are trusted and unchecked, so other writers,
-such as post-tools `addTools`, never fault because of registry movement. Readers tolerate what raw
+such as the generation's `addTools` handling, never fault because of registry movement. Readers tolerate what raw
 writes can produce: request preparation offers the first occurrence of a
-duplicated name, and post-tools `addTools` appends only names not already
-active.
+duplicated name, and the generation's `tools` phase appends only `addTools`
+names not already active.
 
 `init` runs after the conversation creation, which is a table write, so table
 reads inside it throw `ReadAfterWrite` (section 4). Document access remains
@@ -677,8 +702,12 @@ because `Harness extends Session`.
 
 `fork()` requires a concrete visible parent entry and explicit ownership, then
 applies section 3.7.
-`compact()` returns the newly admitted background compaction task ID, not its
-future summary entry. `reset()` durably admits a write submission of a
+`compact()` admits a manual compaction task in one commit and returns its ID,
+not its future summary entry. The task is conversation-owned and not background,
+so `Conversation.abort()` cancels it and idle waits include it. It does not take
+run control, so it does not make the conversation busy: the conversation keeps
+working while it summarizes, and its summary is placed through a write
+submission, at once when idle, otherwise at the next boundary (section 8.7). `reset()` durably admits a write submission of a
 `pi.reset` entry (section 8.1) with `head: "self"`, carrying the handoff text as
 a user message when given, and then resolves; while busy, placement follows
 section 6 and may occur later. Observe its placement through the conversation
@@ -691,8 +720,8 @@ input submissions, marks non-background tasks selected by ordinary ownership
 traversal, signals them, and resolves only after that scope is ordinarily idle.
 Passive writes and background subtrees survive. Conversation idle means no live
 non-background task selected from that conversation. Harness idle applies the
-same traversal from every ownerless conversation root. Pending dependency- or
-deadline-blocked work is still live and therefore not idle. Cancelling an idle
+same traversal from every ownerless conversation root. Waiting,
+deadline-blocked, and `completing` work is still live and therefore not idle. Cancelling an idle
 wait aborts only that waiter.
 
 Conversation handles are stateless; compare them by `id`. Hosts discover
@@ -711,20 +740,24 @@ withdrawal operation. `Harness.submission()` reacquires a submission after
 reopen; records remain queryable after settlement.
 
 `abortTask()` durably requests cancellation and returns `marked` after the mark
-is committed, any active run invocation has joined, and an abort invocation has
-been scheduled, or a blocked task has been settled as `orphaned` (section 5.4);
-it does not await terminal settlement. `waitForTask()` observes
+is committed and any active run invocation has joined, or after a blocked task
+without live ordinary owned work has been settled as `orphaned` (section 5.4).
+The abort invocation starts once the task's ordinary owned work is no longer
+live; a `completing` task is only marked, and its final record keeps its held
+outcome with `abortRequested: true` (section 5.5). It does not await terminal
+settlement. `waitForTask()` observes
 the terminal receipt. Aborting an already terminal task returns `terminal`; an
 unknown ID rejects. Explicit task abort includes a background task. Cancelling a
 task or idle wait does not abort work.
 
 `inspect()` returns live work at one point on the Session line, for recovery
 decisions after open, viewers, and diagnostics. It writes nothing, does not
-enable scheduling, and runs no task code. Each pending or running task carries
-its state under the current registry: `running` with an active invocation;
-`ready` when the next scheduling pass would reserve it, with `migrates` when its
-definition is newer and has `migrate`; `waiting` on unfinished dependencies; or
-`blocked` (section 5.4). A migration shows as failed only after the scheduler
+enable scheduling, and runs no task code. Each live task carries its state
+under the current registry: `running` with an active invocation; `completing`
+for a held outcome; `waiting` with the live tasks it still waits for, the live
+part of its `on`, or, when abort-marked, its live ordinary owned work (section
+5.5); `ready` when the next scheduling pass would reserve it, with `migrates`
+when its definition is newer and has `migrate`; or `blocked` (section 5.4). A migration shows as failed only after the scheduler
 tried it, or when the newer definition has no `migrate`; inspection never runs
 one to find out. Blocked reasons are derived, never stored. Queued and placed
 submissions and the registry's wrapper failures complete the view. Finished
@@ -1000,7 +1033,7 @@ interface Tx {
     token: Entry<D>, conversationId: ConversationId, value: TypedEntryDraft<D>,
   ): Promise<TypedEntry<D>>;
   createTask<I, S extends { phase: string }, R, H extends object>(
-    task: Task<I, S, R, H>, input: I, options?: TaskOptions,
+    task: Task<I, S, R, H>, input: I, options: TaskOptions,
   ): Promise<TaskId<R>>;
   /** Settle a queued or placed submission; only a placed input can be answered. A settled one stays unchanged. */
   settleSubmission(id: SubmissionId, settlement: SubmissionSettlement): void;
@@ -1032,9 +1065,13 @@ For task ownership, the caller supplies only a typed task ID. The Session derive
 the persisted owner conversation from the task's final candidate record.
 
 An owner task may be committed or staged earlier in the same transaction. Before
-Storage admission, the Session rejects a missing, terminal, or abort-marked owner,
-including one made terminal or abort-marked later in that transaction. Existing
-owner edges remain valid when their owners terminalize afterward. Conversation
+Storage admission, the Session rejects a missing, `completing`, terminal, or
+abort-marked owner of a new task or conversation, judged on the owner's final
+candidate record in that transaction. A task therefore cannot create owned work
+in the commit that finishes it. A child task whose explicit `conversationId`
+differs from its owner's conversation, and a child task with `background: true`,
+reject the same way. Existing owner edges remain valid when their owners finish
+afterward. Conversation
 creation returns an inert record, never an operational handle.
 `forkConversation()` additionally validates one visible entry and applies section
 3.7. Only public typed `tx.doc()` is get-or-create. Internal fork copying may create
@@ -1360,7 +1397,7 @@ await session.commit(async tx => {
 
   await tx.appendEntry(conversationId, message);     // first table write
   delete live.message;                               // document mutation remains valid
-  await tx.createTask(Follow, { after: message.id }); // further table writes are fine
+  await tx.createTask(Follow, {}, { ownership: { kind: "conversation" } }); // further table writes are fine
 }, context);
 ```
 
@@ -1398,10 +1435,24 @@ type TaskOutcome<R> =
   | { readonly status: "orphaned"; readonly reason: string }
   | { readonly status: "faulted"; readonly error: TaskOutcomeError };
 
+type JoinPolicy = "failFast" | "allSettled";
+
 type TaskState<S, R> =
   | { readonly status: "pending"; readonly checkpoint: S }
   | { readonly status: "running"; readonly checkpoint: S }
+  /** Parked without an invocation until every task in `on` is terminal; then resumes at `checkpoint` (section 5.5). */
+  | {
+      readonly status: "waiting";
+      readonly checkpoint: S;
+      readonly on: readonly TaskId[];
+      readonly policy: JoinPolicy;
+    }
+  /** Outcome decided; terminal once no ordinary owned work below is live (section 5.5). Runs no more code. */
+  | { readonly status: "completing"; readonly outcome: TaskOutcome<R> }
   | { readonly status: "terminal"; readonly outcome: TaskOutcome<R> };
+
+/** Who owns a task: its conversation (a top-level task) or another task of the same conversation. */
+type TaskOwnership = { readonly kind: "conversation" } | { readonly kind: "task"; readonly taskId: TaskId };
 
 type TaskRecord<I, S, R> = {
   readonly id: TaskId<R>;
@@ -1409,16 +1460,17 @@ type TaskRecord<I, S, R> = {
   readonly kind: string;
   readonly version: number;
   readonly input: I;
-  readonly after: readonly TaskId[];
+  /** Owning task; absent for a task its conversation owns. Immutable. */
+  readonly owner?: TaskId;
   readonly background: boolean;
   readonly abortRequested: boolean;
 } & (
   | {
-      readonly state: Extract<TaskState<S, R>, { status: "pending" | "running" }>;
+      readonly state: Extract<TaskState<S, R>, { status: "pending" | "running" | "waiting" }>;
       readonly memos?: Readonly<Record<string, JsonValue>>;
     }
   | {
-      readonly state: Extract<TaskState<S, R>, { status: "terminal" }>;
+      readonly state: Extract<TaskState<S, R>, { status: "completing" | "terminal" }>;
       readonly memos?: never;
     }
 );
@@ -1427,8 +1479,11 @@ type RunningTask<I, S, R> = TaskRecord<I, S, R> & {
   readonly state: Extract<TaskState<S, R>, { status: "running" }>;
 };
 
-/** State a task commits for itself: a replacement checkpoint or its terminal outcome. */
-type NextTaskState<S, R> = Extract<TaskState<S, R>, { status: "running" | "terminal" }>;
+/**
+ * State a task commits for itself: a replacement checkpoint, a wait, or its outcome. A returned `terminal` state
+ * becomes `completing` while ordinary owned work below is live (section 5.5).
+ */
+type NextTaskState<S, R> = Extract<TaskState<S, R>, { status: "running" | "waiting" | "terminal" }>;
 
 interface HookRunner<H extends object> {
   each<K extends keyof H>(name: K, invoke: (handler: NonNullable<H[K]>) => void | Promise<void>): Promise<void>;
@@ -1466,6 +1521,8 @@ interface TaskRuntime<I, S, R, H extends object> extends DocumentObserver, Docum
   getTask<T>(id: TaskId<T>, context: Context): Promise<TaskRecord<JsonValue, JsonValue, T> | undefined>;
   /** Terminal receipt; rejects when the invocation ends. */
   waitForTask<T>(id: TaskId<T>, context: Context): Promise<SettledTask<T>>;
+  /** Outcomes of terminal tasks, in order; rejects when one is not terminal. Used after a wait (section 5.5). */
+  outcomes<T>(ids: readonly TaskId<T>[], context: Context): Promise<TaskOutcome<T>[]>;
   /** Committed entry visible from the task's conversation. */
   entry(id: EntryId, context: Context): Promise<EntryRecord | undefined>;
   entry<D extends JsonValue>(token: Entry<D>, id: EntryId, context: Context): Promise<TypedEntry<D> | undefined>;
@@ -1498,8 +1555,11 @@ interface Task<I, S extends { phase: string }, R, H extends object> {
 }
 
 type TaskOptions = {
+  /** Required: a task always names its owner (section 5.5). */
+  readonly ownership: TaskOwnership;
+  /** Default: the owner task's conversation, or the transaction's bound conversation. */
   readonly conversationId?: ConversationId;
-  readonly after?: readonly TaskId[];
+  /** Conversation-owned tasks only: excluded from conversation abort and idle, and from cascades. */
   readonly background?: boolean;
 };
 
@@ -1525,9 +1585,12 @@ entry it appends records the task as `byTaskId`. When the
 callback returns a state, the runtime replaces the task's state in the same
 commit, so the checkpoint or outcome is atomic with the callback's entries,
 documents, and child tasks and is type-checked against the task's checkpoint and
-result types. Returning nothing leaves the state unchanged. A terminal state
-drops the memos. `pending` is never returned; only reconciliation and handover
-write it.
+result types. Returning nothing leaves the state unchanged. A terminal or
+completing state drops the memos. A `waiting` state ends the invocation even
+when its checkpoint is unchanged; it rejects when `on` names a missing task, the
+task itself, or a task on its owner chain, which could never finish first, and
+an empty `on` resumes at the next scheduling pass. `pending` is never returned;
+only reconciliation and handover write it.
 
 `Tx` has no task replacement operation. A task changes only its own state,
 through its runtime. The scheduler owns reservation, reconciliation, handover,
@@ -1563,7 +1626,8 @@ for example a child task created by a tool.
 immutable entries off the line, like `Conversation.context()`. Like every runtime
 operation, these reject after the invocation ends.
 
-Reservation durably changes `pending` to `running`. One invocation runs phase
+Reservation durably changes `pending`, or `waiting` once it may resume, to
+`running`. One invocation runs phase
 handlers in sequence; checkpoint commits retain `running`. Before every phase,
 including the first, the scheduler runs one step callback on the Session line.
 It reads the committed task and synchronously applies the first matching rule
@@ -1575,10 +1639,11 @@ invocation queued earlier therefore either lands before the step and counts, or
 reaches the line after it and rejects. Before the first phase only rules 1–3
 apply:
 
-1. Terminal: stop.
+1. Terminal, `completing`, or `waiting`: stop.
 2. Session closing: stop; preserve the checkpoint and any abort mark for reopen.
-3. Run mode with a durable abort mark: end and join the run invocation, then
-   dispatch a fresh abort invocation.
+3. Run mode with a durable abort mark: end and join the run invocation; a fresh
+   abort invocation starts once the task's ordinary owned work is no longer
+   live (section 5.5).
 4. Uncaught error: write terminal `faulted`.
 5. Checkpoint changed, including progress within the same phase: refresh the
    registry snapshot and either hand over (section 5.4) or invoke the phase
@@ -1593,10 +1658,11 @@ invocation still ends; the task stays `running` and the next reservation runs it
 again.
 
 On open, running-task reconciliation changes surviving `running` tasks back to
-`pending`, preserving their checkpoint and abort mark. Task migration runs at
-reservation, atomically with `pending -> running`. One callback handles every
+`pending`, preserving their checkpoint and abort mark; `waiting` tasks stay
+waiting, and `completing` and `waiting` tasks are re-evaluated (section 5.5). Task migration runs at
+reservation, atomically with `pending` or `waiting` -> `running`. One callback handles every
 supported older version. A task whose definition is missing, older than the
-stored version, or fails migration stays `pending` and blocked until a fitting
+stored version, or fails migration stays `pending` or `waiting` and blocked until a fitting
 definition is registered or the task is aborted (section 5.4).
 `close()` marks the runtime closing, seals admission and reservation, signals
 invocations, and stops watches. Outside the Session line it settles admitted
@@ -1626,7 +1692,7 @@ envelope. Candidate insertion and reading the winner are one Session commit, so
 concurrent candidates return the same durable winner. Memos survive checkpoints
 and disappear in the terminal replacement. Bulk progress belongs in a document.
 
-### 5.3 Terminal tasks and dependencies
+### 5.3 Terminal tasks
 
 The terminal task record is the durable result receipt. Its result may directly
 contain a small value or reference an entry:
@@ -1642,10 +1708,14 @@ A terminal transition atomically:
 3. Retires all documents scoped to that task.
 4. Resolves any submissions settled by the task.
 
+A task whose ordinary owned work is live splits this at a `completing` hold
+(section 5.5, rule 4): a task-written outcome's own writes land at hold, and
+items 1 and 3 and its waiters follow in the final commit.
+
 The execution checkpoint and memos disappear from the terminal representation.
-Terminal records remain queryable for dependencies, waiters, inspection, and
-reopen. A normal run becomes eligible when every `after` task is terminal. An abort
-mark bypasses dependencies so pending work can always reach its abort handler,
+Terminal records remain queryable for waits, waiters, inspection, and reopen.
+There are no free-standing task dependencies: ordering comes from a task waiting
+on other tasks (section 5.5). An abort mark lets pending work reach its abort handler,
 or its `orphaned` settlement when its definition is unavailable.
 
 ### 5.4 Scheduler, abort, and ownership
@@ -1659,6 +1729,7 @@ Abort protocol:
 ```text
 commit abortRequested
 signal and join active run invocation
+wait until ordinary owned work is no longer live (section 5.5)
 start a fresh abort invocation
 abort handler commits terminal outcome
 ```
@@ -1674,14 +1745,15 @@ the durable mark on reopen. Cancelling one caller's `Context` only cancels
 that call or wait; it does not durably abort shared work unless the invoked API
 commits an abort mark.
 
-A task may create owned conversations. Conversations are durable scopes; tasks
-are the units of live work counted by idle and marked by abort. History parents
-are irrelevant to ownership traversal.
+A task may create owned conversations and owned tasks (section 5.5).
+Conversations are durable scopes; tasks are the units of live work counted by
+idle and marked by abort. History parents are irrelevant to ownership traversal.
 
 Ordinary traversal starts at an explicitly addressed conversation, visits its
-tasks, and follows conversations owned by each non-background task. It follows
-owner edges after the owner becomes terminal, but a background owner is a
-boundary: ordinary traversal skips that task and its complete owned subtree.
+conversation-owned tasks, follows the tasks each non-background task owns, and
+follows the conversations each non-background task owns. It follows owner edges after the
+owner becomes terminal, but a background task is a boundary: ordinary traversal
+skips that task and its complete owned subtree.
 Direct conversation operations start inside that conversation regardless of its
 owner. Directly aborting a live background task includes that task and follows
 its ordinary owned subtree; nested background owners remain boundaries.
@@ -1690,7 +1762,12 @@ outcome, so the work resumes on reopen. A host that must durably cancel
 everything aborts each live task that `inspect()` lists.
 
 `Conversation.abort()` withdraws queued inputs and marks live non-background
-tasks selected by ordinary traversal. `Conversation.waitForIdle()` waits until
+tasks selected by ordinary traversal. With `{ background: true }` it crosses
+background boundaries: it marks every live task that traversal ignoring the
+background flag reaches when the operation is admitted and withdraws the queued
+inputs of every conversation it reaches. It then waits until every task it
+marked is terminal and the conversation is ordinarily idle; background work
+created afterwards is neither marked nor awaited. `Conversation.waitForIdle()` waits until
 that traversal contains no live non-background task. Harness idle performs the
 same traversal from every ownerless conversation root rather than globally
 counting tasks, so ordinary work below a background owner does not block it.
@@ -1698,24 +1775,29 @@ Explicit `waitForTask()` waits for its referenced task regardless of the task's
 background flag.
 
 An abort mark cascades idempotently to foreground-owned work. The durable
-cancellation intent is the owner's own record: its abort mark, or a terminal
-outcome other than `completed`. The scheduler derives the rest in a later
-reconcile commit, and again at open, so a crash in between loses nothing; work
-already queued on the Session line may make one more commit first. Every live
-non-background task whose owner chain
-reaches a cancelled owner, without first crossing a background owner that is not
-itself cancelled, gets an abort mark, including work created there after the
-cascade. Deriving the marks in their own commit
+cancellation intent is a live owner's own record: its abort mark, or a held
+`completing` outcome other than `completed` (section 5.5). A terminal owner never
+cascades: it became terminal only after its ordinary owned work drained, so its
+intent is already applied, and work later started in a conversation it owned,
+for example a user interrogating a finished subagent, runs normally and is
+reached by ordinary traversal from above. Queued inputs in its owned
+conversations stay queued, as after a failed run (section 6). The scheduler derives the marks in a
+later reconcile commit, and again at open, so a crash in between loses nothing;
+work already queued on the Session line may make one more commit first. Every
+live non-background task whose owner chain, walking up through owning tasks and
+owning conversations, reaches a cancelled live owner, without first crossing a
+background task that has no cancellation intent of its own, gets an abort mark, including work
+created there after the cascade. Deriving the marks in their own commit
 keeps them out of the owner's commit, which may already have written the tasks
 involved. Every conversation the cascade reaches is treated like
 `Conversation.abort()`: its queued input submissions become `unanswered` with
 reason `aborted` and leave its inbox, while queued writes stay. The cascade starts
 below the cancelled task, so that task's own conversation keeps its queue.
-Terminal outcomes `failed`, `faulted`, `orphaned`, and `aborted` record the same
-durable cancellation intent; `completed` does not. Conversation records and
-owner edges are never retired with the task. Active invocations are signalled
-after commit, and a terminal receipt guarantees durable cancellation intent,
-not descendant quiescence.
+Held outcomes `failed`, `faulted`, `orphaned`, and `aborted` record the same
+durable cancellation intent as an abort mark; `completed` does not. Conversation
+records and owner edges are never retired with the task. Active invocations are
+signalled after commit. A terminal receipt guarantees that the task's ordinary
+owned work drained; background work below it may continue.
 
 Every run invocation start resolves the task's definition by `TaskRecord.kind`
 from the scheduler's current registry snapshot:
@@ -1749,9 +1831,11 @@ missing or cannot take the task. The Harness therefore settles it as terminal
 ran and decided the outcome, while `orphaned` means no task code ran, so external
 effects the task started may remain uncleaned. The orphaned `reason` is the
 blocked reason (`missing_task`, `task_too_old`, or `migration_failed`). When
-`abortTask()` finds no active invocation and the current snapshot
-cannot take the task, the marking commit settles it directly; otherwise the
-scheduler settles it when it would reserve the abort invocation. Only an abort (direct, by
+`abortTask()` finds no active invocation, no live ordinary owned work, and a
+current snapshot that cannot take the task, the marking commit settles it
+directly; otherwise the scheduler settles it when it would reserve the abort
+invocation, which is after the owned work drained (section 5.5), so an orphaned
+outcome never holds. Only an abort (direct, by
 conversation, or by cascade) orphans a task; a missing definition alone never
 does. The orphaning commit performs the cleanup the task's code cannot: affected
 input submissions become unanswered with the reason, any matching active run
@@ -1759,13 +1843,14 @@ control is cleared, and task-scoped documents retire. The terminal task record
 and unanswered submissions carry the reason; the only transcript entry written
 is the conversion of a committed generation partial (below).
 Faulting a run task performs the same control/submission cleanup with a
-`faulted` outcome.
+`faulted` outcome; a fault while ordinary owned work is live holds, and its
+cleanup runs in the final commit (section 5.5, rule 4).
 
 The scheduler knows nothing about runs or task kinds. The Harness, which owns
 submissions, run control, and the built-in tasks, gives it one hook that the
-scheduler calls in the same commit for every terminal outcome it writes itself
-(`faulted` and `orphaned`). The hook ignores tasks whose kind is not a built-in
-run or tool kind, so it never creates `pi.live` elsewhere. It settles the run when
+scheduler calls in the commit that makes an outcome it wrote itself (`faulted`
+and `orphaned`) terminal, which is the final commit after a hold. The hook ignores tasks whose kind is not a built-in
+run, tool, or compaction kind, so it never creates `pi.live` elsewhere. It settles the run when
 `pi.live.run` names the task (section 8): a committed generation partial becomes
 an aborted `pi.assistant` entry, exactly as the generation abort handler converts
 it, so the transcript keeps what the model produced and `pi.usage` counts its
@@ -1777,7 +1862,8 @@ non-JSON value in a response, or a commit the Storage rejected without effect
 (`StorageRejected`). An uncertain storage failure poisons the Session and writes
 no outcome. For a `pi.tool` task it marks the task's tool slot `done`
 without an entry; the run continues, and context derivation synthesizes the
-missing result (section 2.1). Outcomes a task commits for itself do their own settlement.
+missing result (section 2.1). For a `pi.compaction` task it removes the task's
+compaction status (section 8.7). Outcomes a task commits for itself do their own settlement.
 
 At every normal phase boundary (section 5.1, rule 5), the step refreshes the
 invocation's registry snapshot. If the task definition resolved by name is a different object
@@ -1790,6 +1876,95 @@ or cannot reserve the task, the invocation keeps running under its old
 definition, reports once through `onReport` per resolved definition, and
 reconsiders at its next boundary. A handler that
 never settles never hands over.
+
+### 5.5 Structured concurrency
+
+Tasks and conversations form one ownership tree. Every task names its owner at
+creation, `tx.createTask(task, input, { ownership })` with a required
+`TaskOwnership`: its conversation (`{ kind: "conversation" }`, a top-level task)
+or a task (`{ kind: "task", taskId }`, a child task). Every conversation is
+ownerless or owned by a task (section 2.2). A child task always lives in its
+owner's conversation; only owned conversations cross conversation boundaries.
+Owner edges are immutable.
+
+The **ordinary owned work** of a task `T` is every task that ordinary traversal
+reaches below `T`: the tasks `T` owns, the tasks in the conversations `T` owns,
+and, transitively, the same for each of those that is not background. A
+background task and everything below it are excluded. A conversation-owned task
+may be background; a child task may not.
+
+Two rules follow from the tree.
+
+**Abort flows down** (section 5.4). A live owner's cancellation intent (its abort
+mark, or a held non-`completed` outcome) marks its ordinary owned work. Background
+tasks are boundaries unless aborted directly or by `Conversation.abort(context,
+{ background: true })`.
+
+**Owned work does not outlive its owner's finish.** A task finishes only after
+its ordinary owned work drained:
+
+1. A terminal state a task commits, or a terminal outcome the scheduler writes
+   (`faulted`, `orphaned`), while the task's ordinary owned work is live is
+   stored as `{ status: "completing", outcome }` instead. The scheduler writes
+   the final `terminal` record in a later commit once no ordinary owned work is
+   live, evaluated after every commit, including work created after the hold.
+   Whether work is live is judged on the commit's candidate records, so work the
+   finishing commit itself creates, for example a task in a conversation the
+   task owns, holds it. At open it re-evaluates every `completing` task.
+2. A held outcome is final: no phase, runtime commit, or abort handler runs
+   again, no definition is needed, the task is never reserved or migrated, and
+   `abortTask()` on it only marks it and returns `marked`, which cancels the
+   work below. The final record keeps the held outcome and the mark.
+3. A held non-`completed` outcome is cancellation intent, so the work below is
+   aborted, drains, and then the task becomes terminal. A held `completed`
+   outcome waits for the work to finish normally.
+4. Writes split at the hold. A task-written terminal commit lands all of its
+   other writes, such as a tool's result entry and slot, at hold. Only the
+   record's terminal state, task-document retirement, and task waiters are
+   deferred to the final commit. A scheduler-written outcome writes only the
+   record at hold; its Harness cleanup (section 5.4) runs in the final commit,
+   so a faulted run task keeps `pi.live.run` until its tools drained.
+5. Waiters, idle waits, inspection, and ordinary traversal see a `completing`
+   task as live until its final commit.
+
+New owned work needs a live owner: `createTask` with task ownership and
+`createConversation` with task ownership reject an owner that is `completing`,
+`terminal`, or abort-marked in the commit's final candidate (section 3.3).
+Conversations stay usable after their owner finished: new runs
+started there, for example to interrogate a finished subagent, are ordinary work
+of that conversation, reached by traversal from above, and not part of any
+finish.
+
+**Waiting.** A phase may commit `{ status: "waiting", checkpoint, on, policy }`.
+The task stops without an invocation and resumes at `checkpoint` once every task
+in `on` is terminal. `on` may name any tasks, including already terminal ones;
+tasks the waiting task does not own, whose `owner` is not the waiting task,
+require `policy: "allSettled"`. `on` may not name a missing task, the task
+itself, or a task on its owner chain (section 5.1). With `failFast`, the first
+task in `on` that holds or ends with a non-`completed` outcome gives every other
+live task in `on` an abort mark, in the scheduler's next reconcile commit. The waiting task itself is not marked:
+it resumes once all of `on` is terminal and reads their outcomes with
+`runtime.outcomes()`. A task may create children and keep running phases before
+it waits, and may wait on any subset of its children in sequence.
+
+**Abort order is bottom-up.** An abort invocation of a task starts only once its
+ordinary owned work is no longer live, so an abort handler sees final outcomes
+below it. An abort mark on a waiting task lets it leave the wait early for its
+abort handler under this same rule; tasks in its `on` that it does not own are
+not awaited. Ordering is judged on committed records: code a child runs after
+its terminal commit is not ordered. An abort handler may not return `waiting`
+and cannot create owned children, because its task is abort-marked (section
+3.3): it compensates inline, or creates background conversation-owned tasks,
+which no cascade reaches, and waits for them with `runtime.waitForTask()`,
+which holds its invocation.
+
+The cascade of the example `Checkout` task, which waits `failFast` on four
+`Payment` children: an expired card fails its payment; the three live payments
+get abort marks and refund in their own abort handlers; once all four are
+terminal, `Checkout` resumes, reads `[aborted, failed, aborted, aborted]`
+through `outcomes()`, and decides its own outcome. `abortTask(Checkout)` instead
+marks `Checkout`, the cascade marks the live payments, their abort handlers run
+first, then `Checkout.abort` runs and sees their final outcomes.
 
 ## 6. Submissions and inbox
 
@@ -1825,8 +2000,8 @@ Run control lives in the built-in live document `pi.live` (section 8). Its
 optional `run` value names the task currently responsible for the run and its
 placed input-submission IDs. `run !== undefined` defines `busy`; get-or-create
 of the idle document does not. The value remains while generation, tools, and
-post-tools hand work to one another: `taskId` names the task that settles the
-inputs, first generation, then post-tools while a tool round runs, then the next
+tools hand work to one another: `taskId` names the generation that settles the
+inputs, including while its tool round runs, then the next
 generation. Tool tasks never own the run; the current round's tool tasks are
 listed in `pi.live.tools`. The ID list is mutable state because a
 boundary adds placed steering inputs to an active run; every terminal path
@@ -1881,6 +2056,19 @@ head cut. Heads placed earlier in the same boundary count: after a queued reset,
 a queued summary targeting an older entry is stale. A `head: "self"` write is
 never stale.
 
+Compaction summaries are head writes (section 8.7), so this rule alone orders
+compactions by cut position: a summary cutting before the active range start is
+stale, and one cutting at or after it is placed, whenever it was selected.
+Example: background compaction B selects at tail 100 and cuts at 70. While it
+summarizes, a blocking compaction A cuts at 150 and appends its summary. B's
+summary then settles `stale`, because 70 is older than 150. Had A cut at 60
+instead, B would be placed after it: B summarized the context at its selection,
+the then-newest summary plus the entries before 70, which covers everything A's
+summary covers. That holds while the only heads are compaction summaries and
+resets, which make older cuts stale; an application edit placed while a
+compaction summarizes is lost, and an application head can be undone (section
+12).
+
 A `postTools` boundary that selects a `head: "self"` write (a reset) behaves as
 `final`: it also selects follow-ups, and the current run ends with its inputs
 `unanswered` with reason `reset`, because its context was cut before an answer.
@@ -1888,8 +2076,8 @@ A reset placed at a `final` boundary follows the answer, so the inputs are
 already `done`.
 
 At ordinary `postTools`, generation continues even with no queued trigger;
-selected steer IDs join that continuation. A terminating or handoff post-tools
-boundary uses final behavior instead. At `final`, the current run's placed
+selected steer IDs join that continuation. A terminating or handoff tool round
+(section 8.5) uses final behavior instead. At `final`, the current run's placed
 input submissions settle first, unless an `onYield` continuation keeps them open
 (below); selected user IDs start one successor generation with those IDs as the
 new run's inputs. Writes never trigger generation by
@@ -2083,7 +2271,7 @@ hooks read that snapshot and never take their own. At every normal phase boundar
 the scheduler takes a fresh one (section 5.4). A tool task keeps the composed tool
 it pinned until execution settles. Different phases may observe different
 registry states; nothing requires one run to see a single registry state across
-its generation, tool, and post-tools tasks. Host operations, such as the create
+its generation and tool tasks. Host operations, such as the create
 conveniences, take one snapshot inside their commit.
 
 ```ts
@@ -2153,6 +2341,8 @@ interface GenerationHooks {
   afterResponse(message: AssistantMessage, api: HookApi, context: Context): void | Promise<void>;
   /** A final answer; `continue` appends a user message and continues the run. */
   onYield(answer: AssistantMessage, api: HookApi, context: Context): HookResult<{ readonly continue: UserInput }>;
+  /** After every tool of the round is terminal; `results` are the round's result entries in call order. */
+  afterTools(assistant: EntryId, results: readonly EntryId[], api: HookApi, context: Context): void | Promise<void>;
 }
 
 interface ToolHooks {
@@ -2171,13 +2361,27 @@ interface ToolHooks {
   ): HookResult<ToolExecutionResult>;
 }
 
-interface PostToolsHooks {
-  /** After every tool of the round is terminal; `results` are the round's result entries in call order. */
-  afterTools(assistant: EntryId, results: readonly EntryId[], api: HookApi, context: Context): void | Promise<void>;
+interface CompactionHooks {
+  /**
+   * After range selection, before summarizing; the first decision wins. `entries` are the active entries the summary
+   * replaces, the head marker first, and `messages` their model context, the summarizer's source; `firstKept` is the
+   * first entry kept verbatim.
+   */
+  beforeCompact(
+    compaction: {
+      readonly reason: CompactionReason;
+      readonly entries: readonly EntryRecord[];
+      readonly messages: readonly Message[];
+      readonly firstKept: EntryId;
+      readonly instructions?: string;
+    },
+    api: HookApi,
+    context: Context,
+  ): HookResult<{ readonly decline: true } | { readonly summary: string }>;
 }
 ```
 
-`GenerationTask`, `ToolTask`, and `PostToolsTask` are the exported built-in task
+`GenerationTask`, `ToolTask`, and `CompactionTask` are the exported built-in task
 tokens whose `H` parameters are these interfaces. `runtime.hooks.each(name,
 invoke)` calls `invoke` with every handler registered under `name` whose
 registration matches the task's conversation, in registry order of the phase
@@ -2397,8 +2601,8 @@ and passes the same stored arguments to `execute()`. A replay-safe tool may
 reconstruct a submission from those arguments when that transformation is pure.
 Random values, timestamps, mutable document/configuration reads, or other derived
 inputs that must remain stable are first captured in a durable memo, checkpoint,
-or task input. A background supervisor receives the final submission draft in
-its own durable input so it can finish independently. Recovery does not let a
+or task input. A background reporter task receives the final message in its own
+durable input so it can finish independently. Recovery does not let a
 changed registry declaration alter the stored replay policy.
 
 A tool-acquired conversation handle accepts only input submissions; tools use
@@ -2443,44 +2647,37 @@ terminalizing the tool task cascades through the owned scope. The tool reports
 the child in its running details, for example `api.details({ conversationId })`,
 so a UI that sees the call can attach to the child's view or events.
 
-A background subagent is provisioned in one transaction. After deduplicating by
-its durable registry key, the tool stages a background supervisor task `B`, a
-child conversation `C` explicitly owned by `B`, and the registry mapping from the
-semantic name to `C` plus its stable request ID. `B` may be staged earlier in the
-same transaction and used immediately as `C`'s owner. Its durable input contains
-the exact submission draft and the registry location/key; it need not contain
-`C`'s not-yet-created ID. Once scheduled, `B` resolves `C` from the mapping,
-which was committed together with `C` and its owner edge, and performs normal
-`Conversation.submit()`.
-A crash before admission makes `B` retry; a crash after admission returns the
-existing request-ID-deduplicated `Submission`. The initiating tool may race the
-same submit for lower latency and wait only for the durable admission receipt.
-The supervisor may complete after setup: its terminal record retains
-`background`, so ancestor ordinary abort and idle traversal continue to stop at
-its owned scope.
+A persistent background subagent outlives the parent's turns and can be
+messaged, steered, stopped, and listed later. One transaction, after
+deduplicating by the subagent's name in an application registry document,
+creates a background conversation-owned anchor task `A` in the parent, a child
+conversation `C` owned by `A`, and the registry mapping from the name to `C`.
+`A` completes at once; it holds `completing` while `C` has ordinary work
+(section 5.5) and then stays terminal. Its record keeps `background`, so the
+parent's ordinary abort and idle traversal stop at it, while
+`Conversation.abort(context, { background: true })` still reaches `C`'s work
+through it, and `Harness.waitForIdle()` does not wait for it. Later runs in `C`
+are ordinary work of `C`; a terminal owner never cascades.
 
-Applications may maintain a conversation document mapping semantic subagent
-names to durable conversation IDs and application-minted submission request IDs.
-A UI lists background subagents from that document; a child is active while its
-`pi.live.run` is set.
-Such a live registry uses `fork: "initial"` so children do not inherit the
-parent's agent list and its update is not a selected fork source. Conversation
-creation/forking, supervisor creation when applicable, and the registry mapping
-commit atomically. The supervisor input, tool's durable final arguments, or a
-durable checkpoint must retain enough information to reconstruct the exact
-submission draft; the registry itself need not duplicate that payload. Initial
-or later input then uses the registered stable request ID with the full
-`Conversation.submit()` state machine. A crash before admission leaves a durable
-request to submit; a crash after admission retries the same request and receives
-the existing `Submission`. A read-only lookup by conversation/request ID can
-report absence or return the durable queued/placed/done/unanswered receipt.
-Submission admission therefore needs no private transaction shortcut and does
-not move onto `Tx`. Owner edges alone drive abort and idle traversal.
+Each message to a subagent is delivered by a background conversation-owned
+reporter task in the parent, created in the tool's transaction and keyed there
+by the tool task ID so a rerun of the call does not create another. The
+reporter submits to `C` with a request ID derived from its own task ID, waits
+for that submission's settlement, and posts the answer to the parent as an
+input with `whenBusy: "followUp"`, under another request ID derived from its
+task ID. A crash before either admission retries it; a crash after returns the
+existing `Submission`, so the child gets the message once and the parent gets
+the answer once. Submission admission therefore needs no private transaction
+shortcut and does not move onto `Tx`. A registry of names uses `fork:
+"initial"` so forks of the parent do not inherit it. A UI lists subagents from
+the registry; a child is working while its `pi.live.run` is set. Owner edges
+alone drive abort and idle traversal.
 
-A tool result may request `addTools`, `terminate`, or `handoff`. Post-tools
-appends added tool names to the configured loadout; they take effect at the next
-preparation. The round terminates only when every result of the round requests
-`terminate`, as in the pi agent loop; post-tools then uses a final boundary. Any
+A tool result may request `addTools`, `terminate`, or `handoff`. The
+generation's `tools` phase (section 8.5) appends added tool names to the
+configured loadout; they take effect at the next preparation. The round
+terminates only when every result of the round requests `terminate`, as in the
+pi agent loop; the `tools` phase then uses a final boundary. Any
 `handoff` in the round, the last one in call order when several ask, ends the
 run the same way after appending a `pi.reset` entry with `head: "self"` and the
 handoff text as a user message (section 8.1), exactly what `reset(handoff)`
@@ -2496,8 +2693,8 @@ registered declaration say `safe`. A current `unsafe` declaration may veto a
 stored-safe replay; a current-safe declaration never upgrades stored unsafe. A
 tool with no current registration is treated as `unsafe`. Every other orphaned
 effect produces an interrupted result containing the
-durable partial output. Completed and aborted tool terminal outcomes retain
-their tool-result entry ID for post-tools.
+durable partial output. Completed, failed, and aborted tool terminal outcomes
+retain their tool-result entry ID for the generation's `tools` phase.
 
 Error results the Harness writes itself set `isError` and carry an `error`
 diagnostic with one of the codes `tool_unavailable`, `invalid_arguments`,
@@ -2556,8 +2753,9 @@ Generation preparation takes these steps against its phase snapshot:
    append one positional `pi.system` entry when they differ.
 
 Preparation does not recheck the transcript before appending: only the Harness
-writes to a busy conversation, through submissions, run tasks, and boundaries,
-so the transcript it read is still current (section 12).
+writes to a busy conversation, through submissions, run tasks, boundaries, and a
+blocking compaction, which appends only while its generation waits for it
+(section 8.7), so the transcript it read is still current (section 12).
 
 Model and thinking level are request options, not prompt state.
 
@@ -2605,7 +2803,7 @@ A PR #9548 `SystemMessage` is always a patch, not a reset: it cannot remove
 previous `content` or restore section order merely by restating current values.
 Therefore, when a head removes the previous request-visible baseline, which is
 the case when the active context has a head marker and no `pi.system` entry
-follows that marker, the new
+was appended after that marker (has a higher ID), the new
 `pi.system` entry adds `ContextEdit` omissions for every earlier `pi.system`
 entry still retained after the cut. Its own message is then a complete baseline
 containing every desired section in order and every effective tool declaration.
@@ -2667,8 +2865,7 @@ The initial implementation provides:
 |---|---|
 | `pi.generation` | prepare system/loadout, request or poll model, retry, classify response |
 | `pi.tool` | validate, hook, execute, persist output and details, append result |
-| `pi.post-tools` | wait for tools, apply controls, run boundary, continue generation |
-| `pi.compaction` | select a transcript range, summarize, append a headed summary |
+| `pi.compaction` | select a transcript range, summarize, place a headed summary |
 
 Generation uses `HarnessOptions.models` without a Pico-specific model adapter. It
 resolves `models.getModel(ref.provider, ref.modelId)`, builds a pi-ai `Context`
@@ -2693,8 +2890,9 @@ does not delete transcript history.
 
 Built-in entry kinds carry no `data`, except `pi.tool-result`, whose token is
 `Entry<{ diagnostics: ToolDiagnostic[] }>`; every tool result carries `data`,
-with an empty list when it has no diagnostics (section 7.3). Each kind is
-exported as an `Entry` token.
+with an empty list when it has no diagnostics (section 7.3), and
+`pi.compaction`, whose token is `Entry<{ reason: CompactionReason }>`. Each kind
+is exported as an `Entry` token.
 
 | kind | `model` | written by |
 |---|---|---|
@@ -2702,9 +2900,10 @@ exported as an `Entry` token.
 | `pi.assistant` | `[AssistantMessage]` with any stop reason | generation |
 | `pi.system` | `[SystemMessage]` with `content: ""` (section 7.4) | generation preparation |
 | `pi.tool-result` | `[ToolResultMessage]` | tool tasks; generation for calls to tools its request did not offer |
-| `pi.reset` | absent, or `[UserMessage]` with the handoff text; always `head: "self"` | `reset()`, post-tools `handoff` |
+| `pi.reset` | absent, or `[UserMessage]` with the handoff text; always `head: "self"` | `reset()`, generation `tools` phase for `handoff` |
+| `pi.compaction` | `[UserMessage]` with the wrapped summary; `head` is the first kept entry | compaction tasks (section 8.7) |
 
-Every provider result becomes a `pi.assistant` entry: answers, failed attempts
+Every generation response becomes a `pi.assistant` entry: answers, failed attempts
 with their error text and usage, and converted partials with stop reason
 `aborted`. Context derivation (section 2.1, rule 9) keeps failed and aborted
 messages out of later requests, so no separate usage or notice kind exists.
@@ -2725,11 +2924,14 @@ type LiveState = {
     /** Provider-side deferred response being polled. */
     deferred?: { pollAt: number };
   };
-  /** The current tool round in call order, from the tool-calling answer until post-tools. */
+  /** The current tool round in call order, from the tool-calling answer until the generation's `tools` phase ends it. */
   tools?: {
     callId: string;
     name: string;
-    /** Absent for a call its request did not offer; generation wrote its result. */
+    /**
+     * Absent for a call not started yet (sequential round, `pending`) and for a call its request did not offer,
+     * which starts `done` with the `entry` generation wrote.
+     */
     taskId?: TaskId;
     status: "pending" | "running" | "done";
     /** Retained running output and what the bounds dropped. */
@@ -2743,6 +2945,18 @@ type LiveState = {
     /** Result entry once done; absent when the tool task faulted or was orphaned. */
     entry?: EntryId;
   }[];
+  /** Live compaction tasks in task ID order; absent when none (section 8.7). */
+  compactions?: CompactionStatus[];
+};
+
+type CompactionStatus = {
+  taskId: TaskId<CompactionResult>;
+  reason: CompactionReason;
+  /** Whether a generation waits for it: a compaction the generation owns. */
+  blocking: boolean;
+  attempt: number;
+  /** Durable backoff before the next summarization attempt. */
+  retry?: { at: number; error: string };
 };
 ```
 
@@ -2773,11 +2987,15 @@ with its result entry. A tool task sets its slot `running` in its intent commit,
 publishes throttled output and details into it, and in its terminal commit sets
 `done` and `entry` and removes `output`, `droppedBytes`, `droppedLines`,
 `details`, and `diagnostics`, which the result entry now carries (section 7.3).
-Post-tools removes `tools`. Slot updates apply only while a slot with the task's
+The generation's `tools` phase removes `tools`. Slot updates apply only while a slot with the task's
 `taskId` exists; without one, the durable partial output, details, and
 diagnostics are empty.
 
-Compaction status joins this document with the compaction task. Partials are
+A compaction's status is added in the commit that creates the task and removed
+in the commit that decides its outcome: the task's own outcome commit, even when
+that outcome holds as `completing` (section 5.5), or the scheduler's cleanup
+(section 5.4).
+It stays small: the summary text lives in the task's placement, never here. Partials are
 normalized to strict JSON before assignment. Every terminal path of a run task
 removes `run`, `generation`, and `tools` in the commit that settles the run's
 inputs. `tx.settleSubmission()` stages each input's new status
@@ -2790,10 +3008,18 @@ so it is not a caller table read and works after the commit's first table write.
 ```ts
 type GenerationInput = {};
 type GenerationCheckpoint =
-  | { phase: "prepare"; attempt: number }
+  | {
+      phase: "prepare";
+      attempt: number;
+      /** The blocking compaction this generation waited for; it starts no other compaction. */
+      compacted?: TaskId<CompactionResult>;
+      /** Error text of the overflow that started `compacted`; checked once when `prepare` resumes. */
+      overflow?: string;
+    }
   | {
       phase: "request";
       attempt: number;
+      compacted?: TaskId<CompactionResult>;
       model: ModelRef;
       thinkingLevel: ModelThinkingLevel;
       streamOptions: ConversationStreamOptions;
@@ -2801,15 +3027,24 @@ type GenerationCheckpoint =
       /** Newest entry included in the request. */
       cutoff: EntryId;
     }
-  | { phase: "retry"; attempt: number; until: number }
+  | { phase: "retry"; attempt: number; compacted?: TaskId<CompactionResult>; until: number }
   | {
       phase: "poll";
       attempt: number;
+      compacted?: TaskId<CompactionResult>;
       model: ModelRef;
       toolExecution: ToolExecutionMode;
       cutoff: EntryId;
       handle: DeferredHandle;
       pollAt: number;
+    }
+  | {
+      /** Waiting on the round's tool tasks; `waiting` holds this checkpoint (section 8.5). */
+      phase: "tools";
+      assistant: EntryId;
+      tools: TaskId<ToolTaskResult>[];
+      /** Calls of a sequential round not started yet, in call order. */
+      pending: string[];
     };
 type GenerationResult = { entryId: EntryId };
 ```
@@ -2819,10 +3054,33 @@ The run's inputs live in `pi.live.run`, not in the task input.
 
 - `prepare` runs section 7.4 against the committed configuration. When no model
   is configured or `models.getModel()` does not know it, the task fails with
-  `no_model`. Otherwise one commit appends the planned `pi.system` entries and
+  `no_model`. When it resumes with `overflow` and its compaction did not
+  complete with an `entryId`, the run fails with `model_error` and the overflow
+  text as detail. Otherwise one commit appends the planned `pi.system` entries and
   moves to `request` with the new tail as `cutoff` and the configuration's model,
   thinking level, stream options, and tool execution mode. These stay fixed for
-  this request attempt; a retry prepares again. The retry policy is read when the
+  this request attempt; a retry prepares again. `compacted` carries over to
+  `request`, `retry`, `poll`, and the next `prepare`.
+- Before that commit, `prepare` checks the compaction thresholds (section 8.7)
+  when the conversation's compaction policy is enabled, the model's
+  `contextWindow` is positive, and `compacted` is absent. The estimate starts at
+  the newest assistant message in the committed model context whose entry was
+  appended after the head marker (all qualify without one) and whose usage is
+  nonzero: pi-ai `calculateContextTokens()` of its usage, plus pi-ai
+  `estimateMessageTokens()` of every context message after it and of the planned
+  system messages. Its request included the marker, because a head is placed
+  only while no request is in flight. Without such a message, every message is
+  estimated. Both thresholds apply only when range selection finds a cut.
+  - Above `contextWindow - reserveTokens`, the blocking threshold: instead of
+    appending, one commit creates a compaction owned by the generation with reason
+    `threshold`, adds its status, and commits `waiting` on it with `allSettled`
+    and checkpoint `{ phase: "prepare", attempt, compacted }`. Whatever its
+    outcome, `prepare` then runs again and sends the request.
+  - Above `contextWindow - reserveTokens - backgroundTokens` with
+    `backgroundTokens > 0` and no compaction status in `pi.live`: the commit that
+    moves to `request` also creates a background compaction, owned by the
+    conversation, with reason `threshold`, and adds its status. The generation
+    does not wait for it. The retry policy is read when the
   attempt's result is classified, because it governs the next attempt (section
   2.2).
 - `request` and `poll` resolve the checkpoint's model through
@@ -2852,8 +3110,18 @@ The run's inputs live in `pi.live.run`, not in the task input.
     any; a dropped continuation is not retried. Both complete with
     `{ entryId }`.
   - `toolUse` with at least one tool call: the commit appends the assistant
-    entry and starts the tool round described below; it completes with
-    `{ entryId }`. A `toolUse` message without calls is classified like `stop`.
+    entry and starts the tool round described below, moving to `waiting` in the
+    `tools` phase. A `toolUse` message without calls is classified like `stop`.
+  - `error` that pi-ai `isContextOverflow()` recognizes, while the compaction
+    policy is enabled, `compacted` is absent, and range selection finds a cut:
+    the commit appends the error entry, removes `generation`, creates a
+    compaction owned by the generation with reason `overflow`, adds its status,
+    and commits `waiting` on it with `allSettled` and checkpoint `{ phase:
+    "prepare", attempt, compacted, overflow }`; the recovery request does not
+    count against the retry policy. Any other overflow,
+    including a second one, is never retried and fails like the non-retryable
+    errors below. A `stop` or `length` response is never classified as overflow;
+    the next threshold check handles silent overflow.
   - `error` that `isRetryableAssistantError()` accepts while the conversation's
     retry policy allows another attempt (`enabled` and `attempt <= maxRetries`,
     so `maxRetries` counts retries after the first attempt): append the error entry and move to
@@ -2877,13 +3145,16 @@ A tool round starts in the commit that appends the tool-calling answer:
    committed model context through `cutoff`: `request` already holds it, and
    `poll` derives it again. A call to a tool not offered gets its
    `tool_unavailable` result entry here, without a task.
-2. Every other call gets one `pi.tool` task with input `{ assistant, callId }`, in
-   call order. The round is sequential when the pinned `toolExecution` is
-   `sequential` or any called tool's registration in the phase snapshot has
-   `executionMode: "sequential"`; then each tool task has `after` its predecessor.
-   Otherwise the tasks run in parallel.
-3. One `pi.post-tools` task gets input `{ assistant, tools }` and `after` every
-   tool task, and `pi.live.run.taskId` names it.
+2. Every other call gets a `pi.tool` task owned by the generation, with input
+   `{ assistant, callId }`. The round is sequential when the pinned
+   `toolExecution` is `sequential` or any called tool's registration in the phase
+   snapshot has `executionMode: "sequential"`: then only the first call gets its
+   task now and the rest wait in `pending`. Otherwise every call gets its task at
+   once and they run in parallel. The checkpoint's `tools` lists the tasks
+   created so far and grows by one per started sequential call, while
+   `pending` shrinks.
+3. The generation commits `waiting` on its tool tasks with `allSettled` and the
+   `tools` checkpoint (section 8.5); `pi.live.run` stays with it.
 4. `pi.live.tools` receives the round's slots (section 8.2), and `generation` is
    removed.
 
@@ -2929,22 +3200,21 @@ because the terminal record keeps it; the call is read from the assistant entry.
   instead. Ending `failed`, like `aborted`, records cancellation intent (section
   5.4), so conversations the call owns, which nothing supervises any more, are
   aborted. A returned `isError` result still completes, and its call's owned work
-  survives. Either way the run continues with the result entry.
+  survives. Either way the run continues with the result entry. A tool task whose
+  owned conversations still have ordinary work when it commits its result holds
+  `completing` with the result entry already written (section 5.5); the
+  generation resumes only when the tool task is terminal.
 - The abort handler commits an `aborted` error result from the slot's durable
   partial output, details, and diagnostics and ends `aborted` with `{ entryId }`.
 
-### 8.5 Post-tools
+### 8.5 Tool rounds
 
-```ts
-type PostToolsInput = { assistant: EntryId; tools: TaskId<ToolTaskResult>[] };
-type PostToolsCheckpoint = { phase: "join" };
-type PostToolsResult = {};
-```
-
-`pi.post-tools` is version 1 and starts at `{ phase: "join" }`. It runs once every
-tool task of the round is terminal. `join` reads the tool records with
-`runtime.getTask()` and the round's result entries from the `pi.live.tools`
-slots, runs the `afterTools` observers, and then commits once:
+The generation resumes in its `tools` phase once every tool task it waits on is
+terminal. In a sequential round with calls left in `pending`, one commit creates
+the next call's owned tool task and waits on it again with the shorter `pending`.
+Otherwise it reads the tool records with `runtime.getTask()` and the round's
+result entries from the `pi.live.tools` slots, runs the `afterTools` observers,
+and then commits once:
 
 - It appends every `addTools` name not already active to the configured
   loadout; the next preparation offers it.
@@ -2955,18 +3225,22 @@ slots, runs the `afterTools` observers, and then commits once:
 - Otherwise it removes `tools` and applies the `postTools` boundary. When that
   boundary placed a reset, the run's inputs settle `unanswered` with `reset` and
   selected user items start a successor run (section 6). Otherwise selected
-  steer IDs join `pi.live.run`, and it creates the next generation and hands it
-  the run.
+  steer IDs join `pi.live.run`, and it creates the next generation, owned by the
+  conversation, and hands it the run.
 
-It completes with `{}`. The abort handler settles the inputs `unanswered` with
-`aborted`, removes `run` and `tools`, and ends `aborted`; it does not stop tool
-tasks that are still running (section 12).
+It completes with `{ entryId }` of the tool-calling answer. Its abort handler
+runs only after its tool tasks are terminal (section 5.5). For every call still
+in `pending`, which never started, it appends an `aborted` error result; a
+started call whose task faulted or was orphaned keeps
+its `done` slot without an entry (section 8.2). It then settles the inputs
+`unanswered` with `aborted`, removes `run`, `generation`, and `tools`, and ends
+`aborted`. `abortTask()` on the generation therefore aborts its whole round.
 
 ### 8.6 Usage
 
 ```ts
 type UsageState = {
-  /** Assistant entries, keyed `provider/modelId`. */
+  /** Assistant entries and compaction summarization attempts, keyed `provider/modelId`. */
   models: Record<string, Usage>;
   /** Tool results, keyed by tool name; their usage has no model identity. */
   tools: Record<string, Usage>;
@@ -2983,15 +3257,176 @@ type UsageState = {
 | view mount | `docs["pi.usage"]` |
 | created | with every Harness conversation (section 2.2) |
 
-`pi.usage` is a derived index of the spend recorded by the conversation's own
-entries; the entries stay authoritative. Every built-in writer of a
-`pi.assistant` entry adds its message's `usage` to `models` under the message's
-own `provider/model`, and every writer of
+`pi.usage` is the ledger of the conversation's own spend. Every built-in writer
+of a `pi.assistant` entry adds its message's `usage` to `models` under the
+message's own `provider/model`, and every writer of
 a `pi.tool-result` entry with `usage` adds it to `tools`, in the same commit.
-Failed and aborted attempts count. A fork starts at zero, so no spend is counted
+Every summarization attempt of a compaction task adds its response's `usage` to
+`models` in the commit that classifies it (section 8.7); that spend has no entry,
+whether the summary is placed, fails, or ends stale. Failed and aborted attempts
+count. A fork starts at zero, so no spend is counted
 twice. `Harness.usage()` sums every conversation's document into the Session
 total; other totals, such as an ownership subtree, are application sums over
 `scanConversations()`. Nothing stores a total across conversations.
+
+### 8.7 Compaction
+
+```ts
+type CompactionReason = "manual" | "threshold" | "overflow";
+type CompactionInput = { reason: CompactionReason; instructions?: string };
+/** The pinned summarization request. */
+type SummaryRequest = {
+  attempt: number;
+  model: ModelRef;
+  thinkingLevel: ModelThinkingLevel;
+  streamOptions: ConversationStreamOptions;
+  maxTokens: number;
+  /** Newest entry of the context the range was selected from. */
+  tail: EntryId;
+  /** First entry kept verbatim; the summary's `head`. */
+  firstKept: EntryId;
+};
+type CompactionCheckpoint =
+  | { phase: "select" }
+  | ({ phase: "summarize" } & SummaryRequest)
+  | ({ phase: "retry"; until: number } & SummaryRequest);
+/**
+ * `entryId` of a blocking compaction's summary, or the `submissionId` of a conversation-owned compaction's summary
+ * write; both absent when nothing was compacted.
+ */
+type CompactionResult = { entryId?: EntryId; submissionId?: SubmissionId };
+```
+
+`pi.compaction` is version 1 and starts at `{ phase: "select" }`. Compaction
+replaces an old prefix of the model context with a summary entry whose `head` is
+the first kept entry (section 2.1). Raw history stays in storage. There are three
+ways to start one; the task is the same, only ownership and placement differ:
+
+| started by | owner | background | generation waits | placement |
+|---|---|---|---|---|
+| `Conversation.compact()` | conversation | no | no | write submission |
+| generation above the background threshold | conversation | yes | no | write submission |
+| generation above the blocking threshold, or on overflow | the generation | no | yes | direct append |
+
+Only a blocking compaction runs while the conversation's run waits for it. The
+others never take run control: the conversation keeps working while they
+summarize, and their summary is placed like any passive write. Compactions do
+not coordinate with each other; several may run at once, and section 6 decides
+between their summaries.
+
+**Range selection** is a pure function of a `ContextView`, whose
+`contributions` give each active entry's model messages after every edit in the
+range (section 2.1, rules 4 and 9), including edits carried by older in-range
+markers, and `keepRecentTokens`.
+
+1. Cut candidates are the non-marker entries whose contribution begins with a
+   user or assistant message. Tool results and system entries are never
+   candidates, so a kept assistant message keeps its tool results. A user entry
+   is not a candidate either while a result for a call of the assistant before
+   it follows it, before the next assistant (section 2.1, rule 7).
+2. Walk the non-marker entries from newest to oldest, adding pi-ai
+   `estimateMessageTokens()` of each contribution. At the first entry where the
+   sum reaches `keepRecentTokens`, the cut is the first candidate at or after
+   that entry in transcript order, or the newest candidate when none follows.
+3. There is nothing to compact when the sum never reaches `keepRecentTokens`, or
+   when no non-marker entry before the cut contributes a model message.
+
+The summarized entries are the head marker, if any, followed by the non-marker
+entries before the cut. Their messages are their contributions, ordered as in
+section 2.1, rules 7 and 8, so an earlier summary is summarized again together
+with the history after it. Nothing is compacted while the context is smaller
+than `keepRecentTokens`, so with a window where `contextWindow - reserveTokens`
+is below it, overflow may come before any threshold compaction.
+
+```text
+1 user   2 assistant (read)   3 tool result, 30k tokens   4 assistant   5 user   6 assistant
+keepRecentTokens 20k: the walk from 6 reaches 20k at 3; the first candidate at or after 3 is 4.
+The summary covers 1-3; the model context becomes [summary, 4, 5, 6].
+```
+
+Phases:
+
+- `select` reads the committed configuration and captures the committed
+  context. When no model is configured or `models.getModel()` does not know it,
+  the task fails with `no_model`. With nothing to compact it completes with
+  `{}`. Otherwise the `beforeCompact` hooks (section 7.2) run with the
+  summarized entries and messages; the first decision wins. `{ decline: true }` completes
+  with `{}`, and `{ summary }` is placed as below in the same commit. Without a
+  decision, one commit moves to `summarize` with attempt 1, the configured model,
+  thinking level, and stream options, `maxTokens` = `min(floor(0.8 *
+  reserveTokens), model.maxTokens)` (the model's value only when positive), the
+  captured tail, and the cut as `firstKept`.
+- `summarize` derives the summarized messages again from the context at `tail`,
+  which is immutable, and serializes them to text: `[User]: ...`,
+  `[Assistant thinking]: ...`, `[Assistant]: ...`,
+  `[Assistant tool calls]: name(key=json, ...)`, and `[Tool result]: ...`
+  truncated to 2000 characters; system messages are omitted. The request has no
+  tools and two messages: a system message with the built-in summarization
+  system prompt, and a user message with the serialized text in
+  `<conversation>` tags followed by the built-in summarization prompt, and
+  `Additional focus: <instructions>` when the input has instructions. It uses the
+  pinned thinking level as `reasoning`, and the pinned stream options without
+  `deferred`, with `cacheRetention: "none"` and the pinned `maxTokens`.
+  Recovery resends the same request. The response is classified in one commit
+  that adds its usage to `pi.usage` (section 8.6):
+  - `stop` with non-empty text and no tool call: the text is the summary, placed
+    as below.
+  - `error` that `isRetryableAssistantError()` accepts while the conversation's
+    retry policy allows another attempt: move to `retry` with `until = now +
+    retryDelayMs(policy, attempt)`, and set the status's `attempt` and `retry`.
+  - anything else, including a `length` stop, which leaves the summary
+    incomplete: fail with `model_error`.
+- `retry` sleeps until `until`, then returns to `summarize` with the next attempt
+  and the same pinned request.
+
+The built-in prompts are the coding agent's structured checkpoint format. The
+prompt also asks the model to carry forward an earlier summary at the start of
+the conversation.
+
+**Placement.** The summary entry is
+
+```ts
+{
+  kind: "pi.compaction",
+  head: firstKept,
+  model: [{ role: "user", content: [{ type: "text", text: wrapped }], timestamp: now }],
+  data: { reason },
+}
+```
+
+where `wrapped` is `"The conversation history before this point was compacted
+into the following summary:\n\n<summary>\n"`, the summary, and
+`"\n</summary>"`. The commit that places it also removes the task's status and
+commits the task's `completed` outcome:
+
+- A blocking compaction appends the entry directly and completes with
+  `{ entryId }`. Its generation holds the run and waits, so nothing else writes
+  the conversation.
+- A conversation-owned compaction admits the entry as a write submission with
+  request ID `compaction:<taskId>`, following section 6 exactly: in an idle
+  conversation with an empty inbox it is appended at once or settles `stale`;
+  in an idle conversation with queued items it queues and a final boundary runs;
+  in a busy one it queues for the next boundary. It completes with
+  `{ submissionId }` and never waits for a queued placement;
+  `Harness.submission()` observes the placement.
+
+The next generation's preparation finds a head marker without a later
+`pi.system` entry and writes a complete system baseline (section 7.4).
+
+**Cancellation.** The abort handler removes the task's status and ends
+`aborted`; it writes no entry. An attempt cut short by abort or a crash has no
+committed response, so its usage is not counted. A manual compaction is
+ordinary work of its conversation: `Conversation.abort()` aborts it. A
+background compaction survives it and stops only through `abortTask()` or
+`Conversation.abort(context, { background: true })`. A blocking compaction is
+aborted with its generation, before the generation's abort handler runs
+(section 5.5). A summary that is already queued is a write submission:
+conversation abort keeps it, and `Submission.abort()` withdraws it.
+
+When a blocking compaction ends without an `entryId`, because it found nothing
+to compact, was declined, failed, faulted, or was aborted directly, a threshold
+generation sends its request anyway and an overflow generation fails with
+`model_error` (section 8.3).
 
 
 ## 9. Document observation and Chord
@@ -3184,8 +3619,8 @@ appended head marker `H` makes the entries `H` followed by the current non-head
 entries at or after `H.head`: the kept entries stay, and splices remove the
 others and insert `H` at the front. Every kept entry is already mounted because
 Harness writers never target a head before the current range: resets and
-handoffs head themselves, and queued head writes that reach further back are
-stale (section 6). A raw head write that targets further back shows only the
+handoffs head themselves, compaction summaries target a kept entry of the
+current range, and head writes that reach further back are stale (section 6). A raw head write that targets further back shows only the
 mounted entries (section 12).
 Document creation and retirement set and delete the `docs` key. Parent entries
 through `parent.at` are immutable, so a child's mount follows only its own
@@ -3217,6 +3652,8 @@ type AgentEvent =
       /** Current generation attempt: its in-flight partial, retry backoff, or deferred poll. */
       generation?: { attempt: number; message?: AssistantMessage; retry?: { at: number; error: string }; deferred?: { pollAt: number } };
       tools: readonly ToolSlot[];
+      /** `pi.live.compactions` (section 8.2). */
+      compactions: readonly CompactionStatus[];
       inbox: readonly { id: SubmissionId; mode: InboxItem["mode"] }[];
       config: ConversationConfigState;
       usage: UsageState;
@@ -3248,7 +3685,10 @@ type AgentEvent =
   | { type: "entry_appended"; entry: EntryRecord }
   | { type: "config_changed"; config: ConversationConfigState }
   | { type: "usage_changed"; usage: UsageState }
-  | { type: "task_failed"; taskId: TaskId; kind: string; message: string };
+  | { type: "task_failed"; taskId: TaskId; kind: string; message: string }
+  | { type: "compaction_start"; taskId: TaskId; reason: CompactionReason; blocking: boolean }
+  /** The task's receipt tells whether it produced a summary; the summary entry has its own events. */
+  | { type: "compaction_end"; taskId: TaskId; reason: CompactionReason };
 
 /** One change to the in-flight assistant message, relative to that message. */
 type MessageChange =
@@ -3278,8 +3718,9 @@ Events derive from committed changes:
   successor run whose first input differs. Steers joining the current run and
   handovers between its tasks are not run events. The inputs' outcomes are
   `submission` events.
-- `turn_start`: a `pi.generation` task is created. `turn_end`: a generation or
-  post-tools task ends without creating a post-tools task.
+- `turn_start`: a `pi.generation` task is created. `turn_end`: a generation's
+  outcome is committed, when it holds `completing` or becomes terminal,
+  whichever comes first, so a successor created at hold starts after it.
 - `message_start`: the first committed partial of an attempt, or, for a message
   entry without a committed partial, the entry itself; `message_end` follows for
   every entry with `model` messages. Generation commits a partial only once it has
@@ -3304,14 +3745,18 @@ Events derive from committed changes:
   when a safe replay restarts the tool, send `null` and `[]`.
   `tool_execution_end`: the slot becomes `done`, with its `pi.tool-result`
   entry, which carries the diagnostics, or without one after a fault or
-  orphan; an unfinished slot that disappears because its run ended also ends
-  without an entry.
+  orphan. An unfinished slot that disappears because its run ended ends with the
+  result entry appended in the same commit, as for the unstarted calls of an
+  aborted round, directly before its `message_start`, or without an entry.
 - `inbox_update`, `config_changed`, `usage_changed`: the document changed; a
   retired one reads as its initial value, as in a snapshot.
 - `auto_retry_start`/`auto_retry_end`, `deferred_poll`: `pi.live.generation`
   gains or drops `retry`, or gains `deferred` or moves its `pollAt`.
 - `task_failed`: a task of the conversation settles `faulted` or `orphaned`.
-- `compaction_start`/`compaction_end` are added with compaction (Package 19).
+- `compaction_start`/`compaction_end`: a status appears in or disappears from
+  `pi.live.compactions`. A retry backoff shows only in the snapshot's
+  `compactions`. A queued summary is placed later with its own
+  `message_start`/`message_end` and `submission` events.
 
 One commit produces one batch, in this order: `tool_execution_start`,
 `message_start` of a first partial, `message_update`, `tool_execution_update`,
@@ -3319,9 +3764,9 @@ and retry/deferred events; then entries in append order with their
 `message_start`/`message_end` or `entry_appended`, where a tool result's
 `tool_execution_end` directly precedes its `message_start`, as in the coding
 agent; then the `tool_execution_end` of tools ending without an entry;
-then `task_failed`, `turn_end`, `run_end`; then `submission` events in ID order;
-then `inbox_update`, `config_changed`, and `usage_changed`; and last `run_start`
-and `turn_start`. A stream buffers at most 100 undelivered
+then `compaction_end`, `task_failed`, `turn_end`, `run_end`; then `submission`
+events in ID order; then `inbox_update`, `config_changed`, and `usage_changed`;
+and last `compaction_start`, `run_start`, and `turn_start`. A stream buffers at most 100 undelivered
 batches; adding another replaces every undelivered batch with one `snapshot` of
 the newest committed state. The stream therefore converges but does not promise
 every transition; `Submission.wait()` reports exact outcomes. A reconnecting
@@ -3357,7 +3802,7 @@ type EntryQuery = {
 type TaskQuery = {
   readonly conversationId?: ConversationId;
   readonly kind?: string;
-  readonly status?: "pending" | "running" | "terminal";
+  readonly status?: "pending" | "running" | "waiting" | "completing" | "terminal";
   readonly abortRequested?: boolean;
   readonly background?: boolean;
 };
@@ -3609,7 +4054,24 @@ These are contracts, not invitations to add defensive machinery:
   use a write submission.
 - **Queued items after a failed run:** failure and task abort leave the inbox alone.
   Queued follow-ups wait in `pi.inbox`, and their `wait()` does not settle, until
-  the next submission's boundary places them or the host withdraws them.
+  the next submission's boundary places them or the host withdraws them. A
+  compaction summary is such a submission: when a manual or background
+  compaction finishes in that idle conversation, its final boundary places the
+  waiting follow-ups and starts a run.
+- **Compaction spend:** every manual and background compaction pays for one
+  summarization request per attempt, also when its summary ends stale because a
+  later compaction cut further.
+- **Heads and edits during compaction:** a summary reflects the context when its
+  compaction selected the range. An application edit placed while it
+  summarizes, such as a write replacing entry 20, is lost when the summary cuts
+  past its target: the summary still describes the old entry 20, and the edit's
+  target leaves the range. An application head placed meanwhile, for example
+  one cutting at 85 to forget entries 10-84, is undone by a summary cutting at 90:
+  that summary still describes 10-84. Place such writes before compacting.
+- **Summary timestamps:** a queued summary's user message carries the time its
+  compaction finished, not its placement. Code that judges usage staleness by
+  message timestamps, such as pi-ai `estimateContextTokens()` over view
+  messages, can misjudge; the Harness estimate uses entry order (section 8.3).
 - **Raw head writes into the past:** a head written directly with `tx.appendEntry()`
   that targets an entry before the conversation's active range changes model
   context, but a mounted view keeps only the entries it already holds until the
@@ -3617,10 +4079,23 @@ These are contracts, not invitations to add defensive machinery:
 - **Double-counted subagent spend:** a tool that runs an owned conversation must
   not report that conversation's usage in its result; the child's `pi.usage`
   already counts it, and subtree sums would count it twice.
-- **Aborting one run task:** `abortTask()` on a run's post-tools task ends the
-  run but leaves its tool tasks running; their results land in a conversation
-  that may be idle or running another run. Use `Conversation.abort()`, which
-  aborts every task of the conversation's run, tools included.
+- **Owned work holds its owner:** a task that owns live ordinary work stays
+  `completing` until that work ends (section 5.5). Foreground work an extension
+  starts in a subagent's conversation holds the calling tool, and with it the
+  run; interrogating a subagent while its tool is completing extends the hold.
+  Esc or a host timeout ends it; work that should not hold its owner is created
+  conversation-owned and `background`.
+- **Work created by hooks:** hooks run inside the asking task's invocation, so
+  work they create owned by that task holds it. Work that must delay a task's
+  finish has to be created before the task commits its outcome; a listener
+  reacting to published events afterwards cannot extend it. A run task's owned
+  work must not write the transcript after the run was released.
+- **Compensation in abort handlers:** an abort handler cannot create owned
+  children, because its task is abort-marked. Compensate at the level
+  that did the effect, in that task's own abort handler, or inline, or through
+  background conversation-owned tasks awaited with `waitForTask()`; a
+  non-background one would be aborted by any cascade that reaches its
+  conversation.
 - **Hook memo names:** hooks share the asking task's memo namespace with the
   task and other hooks. Prefix memo names.
 - **Long transactions:** an async commit callback holds the Session mutation
