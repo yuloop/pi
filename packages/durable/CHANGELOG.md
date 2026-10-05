@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.0.3] - 2026-10-05
+
 ### Breaking Changes
 
 - `FileSystem` requires `openBinaryReader()` and `openDirReader()`; custom environments must implement them.
